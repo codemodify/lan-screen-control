@@ -1,18 +1,58 @@
 package capture
 
 import (
+	"runtime"
 	"strings"
 	"testing"
 )
 
-func TestFFmpegArgsIncludeH264Pipe(t *testing.T) {
-	cfg := Config{FFmpeg: "ffmpeg", FPS: 20, Height: 720, Device: "1"}
+func TestFFmpegArgsWebRTCFriendly(t *testing.T) {
+	cfg := Config{FFmpeg: "ffmpeg", FPS: 20, Width: 1280, Height: 720, Device: "1"}
 	args := cfg.Args()
 	joined := strings.Join(args, " ")
-	if !strings.Contains(joined, "libx264") || !strings.Contains(joined, "pipe:1") {
-		t.Fatalf("expected H.264 pipe output, got %q", joined)
+	for _, want := range []string{
+		"libx264",
+		"pipe:1",
+		"zerolatency",
+		"yuv420p",
+		"repeat-headers=1",
+		"sliced-threads=0",
+		"aud=1",
+		"dump_extra",
+		"force_original_aspect_ratio=decrease",
+		"pad=1280:720",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("expected %q in ffmpeg args, got %q", want, joined)
+		}
 	}
-	if !strings.Contains(joined, "zerolatency") {
-		t.Fatalf("expected zerolatency tune, got %q", joined)
+	if strings.Contains(joined, "sliced-threads=1") {
+		t.Fatal("sliced-threads=1 produces multi-slice frames that green-screen Chrome")
+	}
+}
+
+func TestScaleFilterEvenNative(t *testing.T) {
+	got := (Config{Width: 0, Height: 0}).scaleFilter()
+	if !strings.Contains(got, "trunc(iw/2)*2") || !strings.Contains(got, "format=yuv420p") {
+		t.Fatalf("native scale should force even yuv420p, got %q", got)
+	}
+}
+
+func TestVideotoolboxEncoderSelection(t *testing.T) {
+	cfg := (Config{Encoder: "videotoolbox"}).normalized()
+	if runtime.GOOS == "darwin" {
+		if cfg.Encoder != EncoderVideoToolbox {
+			t.Fatalf("darwin should keep videotoolbox, got %s", cfg.Encoder)
+		}
+		return
+	}
+	if cfg.Encoder != EncoderLibx264 {
+		t.Fatalf("non-darwin should fall back to libx264, got %s", cfg.Encoder)
+	}
+}
+
+func TestEncoderAlias(t *testing.T) {
+	if (Config{Encoder: "x264"}).normalized().Encoder != EncoderLibx264 {
+		t.Fatal("x264 should alias to libx264")
 	}
 }

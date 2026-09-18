@@ -21,7 +21,9 @@ func main() {
 	ffmpeg := flag.String("ffmpeg", "ffmpeg", "path to the ffmpeg binary")
 	device := flag.String("device", "1", "AVFoundation video device index (screen is usually 1)")
 	fps := flag.Int("fps", 20, "capture frame rate")
-	height := flag.Int("height", 720, "scale encoded height in pixels (0 = native)")
+	width := flag.Int("width", 1280, "encoded canvas width in pixels (0 with -height 0 = even native)")
+	height := flag.Int("height", 720, "encoded canvas height in pixels (0 with -width 0 = even native)")
+	encoder := flag.String("encoder", "libx264", "H.264 encoder: libx264 (default) or videotoolbox (macOS)")
 	stun := flag.String("stun", "stun:stun.l.google.com:19302", "optional STUN URL; empty disables STUN")
 	listDevices := flag.Bool("list-devices", false, "print ffmpeg capture devices and exit")
 	flag.Parse()
@@ -39,10 +41,12 @@ func main() {
 
 	hub, err := rdp.NewHub(rdp.Config{
 		Source: capture.New(capture.Config{
-			FFmpeg: *ffmpeg,
-			FPS:    *fps,
-			Height: *height,
-			Device: *device,
+			FFmpeg:  *ffmpeg,
+			FPS:     *fps,
+			Width:   *width,
+			Height:  *height,
+			Device:  *device,
+			Encoder: *encoder,
 		}),
 		Input: input.New(),
 		STUN:  *stun,
@@ -62,7 +66,9 @@ func main() {
 		"addr", "http://"+*addr+"/",
 		"device", *device,
 		"fps", *fps,
+		"width", *width,
 		"height", *height,
+		"encoder", *encoder,
 	)
 	slog.Info("grant Screen Recording + Accessibility to this process (or to Terminal) on macOS")
 

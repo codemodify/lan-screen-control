@@ -22,7 +22,7 @@ Linux browser  --HTTP POST SDP-->  Go server on Mac :62000
 
 The same process serves the client at `http://<mac-lan-ip>:62000/`.
 
-**Media:** ffmpeg captures the screen (`avfoundation` on macOS) and encodes **baseline H.264** (`libx264`, ultrafast + zerolatency). [pion/webrtc](https://github.com/pion/webrtc) sends those NAL units on a video track.
+**Media:** ffmpeg captures the screen (`avfoundation` on macOS) and encodes **constrained-baseline H.264** (`libx264` by default: `yuv420p`, zerolatency, regular IDRs, `repeat-headers`, no slice threads). Access units (SPS/PPS + every slice of a picture) are assembled before each pion `WriteSample` so Chrome sees one complete frame per RTP timestamp. [pion/webrtc](https://github.com/pion/webrtc) packetizes those Annex-B AUs. On macOS you can try `-encoder videotoolbox` if `libx264` is a problem.
 
 **Input:** the browser posts pointer/keyboard events on a WebRTC data channel. On macOS the server injects them with CoreGraphics (`CGEventPost`). That requires **Accessibility** permission.
 
@@ -74,9 +74,13 @@ Useful flags:
 | `-ffmpeg` | `ffmpeg` | ffmpeg binary |
 | `-device` | `1` | AVFoundation video index |
 | `-fps` | `20` | Capture frame rate |
-| `-height` | `720` | Encoded height (`0` = native) |
+| `-width` | `1280` | Encoded canvas width (`0` with `-height 0` = even native) |
+| `-height` | `720` | Encoded canvas height (`0` with `-width 0` = even native) |
+| `-encoder` | `libx264` | `libx264` (default, WebRTC-friendly) or `videotoolbox` (macOS) |
 | `-stun` | `stun:stun.l.google.com:19302` | Optional STUN; empty disables it |
 | `-list-devices` | | Print ffmpeg devices and exit |
+
+The default canvas is **1280×720** with aspect-preserving scale + letterbox pad (even dimensions, `yuv420p`). Native Retina sizes often confuse software encoders; use `-width 0 -height 0` only if you need full resolution.
 
 ## Connect from a Linux browser
 
@@ -129,7 +133,7 @@ web/                 vanilla HTML/JS/CSS client (embedded in the binary)
 - **No authentication.** Anyone who can reach `:62000` on your LAN can take the first session and control the Mac. Use a trusted network only (or bind to a VPN interface via `-addr`).
 - **Primary display only.** No multi-monitor picker.
 - **US-ANSI keycodes.** Physical keys are mapped from `KeyboardEvent.code` to macOS virtual key codes; other layouts may mis-fire punctuation.
-- **H.264 only.** The viewer browser must decode H.264 (typical for Chrome/Edge/Firefox).
+- **H.264 only.** The viewer browser must decode H.264 (typical for Chrome/Edge/Firefox). If the picture is a green rectangle with a thin strip of desktop, rebuild with this repo’s access-unit path (do not stream one NAL per sample).
 - **ffmpeg is required** on the Mac for capture + encode.
 - **Permissions are easy to get wrong.** If the picture is black, check Screen Recording. If the cursor does not move, check Accessibility.
 - **No clipboard, file transfer, audio, or multi-user control.**

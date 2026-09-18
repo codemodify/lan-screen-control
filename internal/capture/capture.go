@@ -5,6 +5,7 @@
 package capture
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"io"
@@ -12,21 +13,30 @@ import (
 	"os/exec"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/h264reader"
 )
 
+// Encoder names accepted by Config.Encoder.
+const (
+	EncoderLibx264      = "libx264"
+	EncoderVideoToolbox = "videotoolbox"
+)
+
 // Config selects how ffmpeg grabs and encodes the primary display.
 type Config struct {
-	FFmpeg string // path to ffmpeg (default "ffmpeg")
-	FPS    int
-	Height int    // scale output height; 0 keeps native resolution
-	Device string // AVFoundation video index; screen is usually "1"
+	FFmpeg  string // path to ffmpeg (default "ffmpeg")
+	FPS     int
+	Width   int    // encoded canvas width; 0 with Height 0 = even native
+	Height  int    // encoded canvas height; 0 with Width 0 = even native
+	Device  string // AVFoundation video index; screen is usually "1"
+	Encoder string // libx264 (default) or videotoolbox (macOS)
 }
 
-// Source writes H.264 NAL units until the context is cancelled.
+// Source writes H.264 access units until the context is cancelled.
 type Source interface {
 	Run(ctx context.Context, write func(media.Sample) error) error
 }
@@ -38,23 +48,40 @@ type FFmpegSource struct {
 
 // New returns the production screen-capture source.
 func New(cfg Config) Source {
-	if cfg.FFmpeg == "" {
-		cfg.FFmpeg = "ffmpeg"
-	}
-	if cfg.FPS <= 0 {
-		cfg.FPS = 20
-	}
-	if cfg.Device == "" {
-		cfg.Device = "1"
-	}
+	cfg = cfg.normalized()
 	return &FFmpegSource{Config: cfg}
 }
 
-// Run starts ffmpeg and forwards each NAL to write. It returns when ffmpeg
-// exits or ctx is cancelled.
+func (c Config) normalized() Config {
+	if c.FFmpeg == "" {
+		c.FFmpeg = "ffmpeg"
+	}
+	if c.FPS <= 0 {
+		c.FPS = 20
+	}
+	if c.Device == "" {
+		c.Device = "1"
+	}
+	switch strings.ToLower(c.Encoder) {
+	case "", EncoderLibx264, "x264":
+		c.Encoder = EncoderLibx264
+	case EncoderVideoToolbox, "h264_videotoolbox", "vt":
+		c.Encoder = EncoderVideoToolbox
+	default:
+		c.Encoder = EncoderLibx264
+	}
+	if c.Encoder == EncoderVideoToolbox && runtime.GOOS != "darwin" {
+		c.Encoder = EncoderLibx264
+	}
+	return c
+}
+
+// Run starts ffmpeg and forwards each access unit to write. It returns when
+// ffmpeg exits or ctx is cancelled.
 func (s *FFmpegSource) Run(ctx context.Context, write func(media.Sample) error) error {
-	args := s.Config.Args()
-	cmd := exec.CommandContext(ctx, s.Config.FFmpeg, args...)
+	cfg := s.Config.normalized()
+	args := cfg.Args()
+	cmd := exec.CommandContext(ctx, cfg.FFmpeg, args...)
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("ffmpeg stdout: %w", err)
@@ -66,24 +93,13 @@ func (s *FFmpegSource) Run(ctx context.Context, write func(media.Sample) error) 
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start ffmpeg: %w", err)
 	}
-	slog.Info("ffmpeg started", "args", args)
+	slog.Info("ffmpeg started", "encoder", cfg.Encoder, "args", args)
 
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, rerr := stderr.Read(buf)
-			if n > 0 {
-				slog.Debug("ffmpeg", "stderr", string(buf[:n]))
-			}
-			if rerr != nil {
-				return
-			}
-		}
-	}()
+	go logFFmpegStderr(stderr)
 
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- pumpH264(stdout, s.Config.FPS, write)
+		errCh <- pumpH264(stdout, cfg.FPS, write)
 	}()
 
 	var runErr error
@@ -103,10 +119,22 @@ func (s *FFmpegSource) Run(ctx context.Context, write func(media.Sample) error) 
 	return nil
 }
 
+func logFFmpegStderr(r io.Reader) {
+	sc := bufio.NewScanner(r)
+	for sc.Scan() {
+		line := strings.TrimSpace(sc.Text())
+		if line == "" {
+			continue
+		}
+		slog.Warn("ffmpeg", "stderr", line)
+	}
+}
+
 // Args builds the ffmpeg command line for the current OS.
 func (c Config) Args() []string {
+	c = c.normalized()
 	fps := strconv.Itoa(c.FPS)
-	args := []string{"-hide_banner", "-loglevel", "warning", "-fflags", "nobuffer"}
+	args := []string{"-hide_banner", "-loglevel", "warning", "-fflags", "+nobuffer+genpts"}
 
 	switch runtime.GOOS {
 	case "darwin":
@@ -124,25 +152,75 @@ func (c Config) Args() []string {
 		)
 	}
 
-	args = append(args, "-an")
-	if c.Height > 0 {
-		args = append(args, "-vf", fmt.Sprintf("scale=-2:%d", c.Height))
-	}
 	args = append(args,
-		"-c:v", "libx264",
-		"-preset", "ultrafast",
-		"-tune", "zerolatency",
-		"-profile:v", "baseline",
-		"-level", "3.1",
+		"-an",
+		"-vf", c.scaleFilter(),
 		"-pix_fmt", "yuv420p",
-		"-g", fps,
-		"-keyint_min", fps,
-		"-bf", "0",
-		"-x264-params", "scenecut=0:bframes=0:sliced-threads=1",
-		"-f", "h264",
-		"pipe:1",
+		"-r", fps,
 	)
+	args = append(args, c.encoderArgs(fps)...)
+	args = append(args, "-f", "h264", "pipe:1")
 	return args
+}
+
+func (c Config) encoderArgs(fps string) []string {
+	switch c.Encoder {
+	case EncoderVideoToolbox:
+		// Hardware path on macOS. Still Annex-B + dump_extra so Chrome sees
+		// SPS/PPS with keyframes. Falls back to software if VT rejects the
+		// profile (`-allow_sw 1`).
+		return []string{
+			"-c:v", "h264_videotoolbox",
+			"-profile:v", "baseline",
+			"-allow_sw", "1",
+			"-realtime", "1",
+			"-bf", "0",
+			"-g", fps,
+			"-b:v", "4M",
+			"-maxrate", "6M",
+			"-bufsize", "2M",
+			"-bsf:v", "dump_extra",
+		}
+	default:
+		// Constrained-baseline, one slice per picture, headers on every IDR.
+		return []string{
+			"-c:v", "libx264",
+			"-preset", "ultrafast",
+			"-tune", "zerolatency",
+			"-profile:v", "baseline",
+			"-level", "3.1",
+			"-bf", "0",
+			"-g", fps,
+			"-keyint_min", fps,
+			"-sc_threshold", "0",
+			"-x264-params", "repeat-headers=1:annexb=1:aud=1:bframes=0:scenecut=0:sliced-threads=0:threads=1:cabac=0:8x8dct=0",
+			"-bsf:v", "dump_extra",
+		}
+	}
+}
+
+func (c Config) scaleFilter() string {
+	w, h := even(c.Width), even(c.Height)
+	switch {
+	case w == 0 && h == 0:
+		return "scale=trunc(iw/2)*2:trunc(ih/2)*2,setsar=1,format=yuv420p"
+	case w == 0:
+		return fmt.Sprintf("scale=-2:%d,setsar=1,format=yuv420p", h)
+	case h == 0:
+		return fmt.Sprintf("scale=%d:-2,setsar=1,format=yuv420p", w)
+	default:
+		return fmt.Sprintf(
+			"scale=%d:%d:force_original_aspect_ratio=decrease,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:black,setsar=1,format=yuv420p",
+			w, h, w, h,
+		)
+	}
+}
+
+func even(n int) int {
+	if n <= 0 {
+		return 0
+	}
+	return n - n%2
 }
 
 func pumpH264(r io.Reader, fps int, write func(media.Sample) error) error {
@@ -154,47 +232,31 @@ func pumpH264(r io.Reader, fps int, write func(media.Sample) error) error {
 	if dur <= 0 {
 		dur = 50 * time.Millisecond
 	}
+
+	var b auBuilder
+	emit := func(au []byte) error {
+		return write(media.Sample{Data: au, Duration: dur})
+	}
+
 	for {
 		nal, err := reader.NextNAL()
 		if err != nil {
 			if err == io.EOF {
+				if au, ok := b.Flush(); ok {
+					if werr := emit(au); werr != nil {
+						return werr
+					}
+				}
 				return io.EOF
 			}
 			return err
 		}
-		data := withStartCode(nal.Data)
-		sample := media.Sample{Data: data, Duration: 0}
-		switch nal.UnitType {
-		case h264reader.NalUnitTypeCodedSliceIdr,
-			h264reader.NalUnitTypeCodedSliceNonIdr,
-			h264reader.NalUnitTypeCodedSliceDataPartitionA,
-			h264reader.NalUnitTypeCodedSliceDataPartitionB,
-			h264reader.NalUnitTypeCodedSliceDataPartitionC:
-			sample.Duration = dur
-		}
-		if err := write(sample); err != nil {
-			return err
+		if au, ok := b.Push(nal.Data); ok {
+			if err := emit(au); err != nil {
+				return err
+			}
 		}
 	}
-}
-
-func withStartCode(nal []byte) []byte {
-	if hasStartCode(nal) {
-		return nal
-	}
-	out := make([]byte, 0, 4+len(nal))
-	out = append(out, 0x00, 0x00, 0x00, 0x01)
-	return append(out, nal...)
-}
-
-func hasStartCode(b []byte) bool {
-	if len(b) >= 4 && b[0] == 0 && b[1] == 0 && b[2] == 0 && b[3] == 1 {
-		return true
-	}
-	if len(b) >= 3 && b[0] == 0 && b[1] == 0 && b[2] == 1 {
-		return true
-	}
-	return false
 }
 
 // ListDevices prints ffmpeg's AVFoundation device list (macOS) and returns.
