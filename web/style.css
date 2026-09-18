@@ -35,10 +35,6 @@ html, body {
   object-fit: contain;
   background: #000;
   outline: none;
-  cursor: none;
-}
-
-#screen:not(.live) {
   cursor: default;
 }
 

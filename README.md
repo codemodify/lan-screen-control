@@ -77,6 +77,7 @@ Useful flags:
 | `-width` | `1280` | Encoded canvas width (`0` with `-height 0` = even native) |
 | `-height` | `720` | Encoded canvas height (`0` with `-width 0` = even native) |
 | `-encoder` | `libx264` | `libx264` (default, WebRTC-friendly) or `videotoolbox` (macOS) |
+| `-capture-cursor` | `false` | Include the macOS pointer in the captured video (`ffmpeg -capture_cursor 1`) |
 | `-stun` | `stun:stun.l.google.com:19302` | Optional STUN; empty disables it |
 | `-list-devices` | | Print ffmpeg devices and exit |
 
@@ -91,6 +92,8 @@ The default canvas is **1280×720** with aspect-preserving scale + letterbox pad
 
 3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events from the video surface.
 4. Use **Fullscreen** for a desktop-like layout. Click the video so keystrokes are captured.
+
+The Mac pointer is **not** burned into the video (`-capture_cursor 0` unless you pass `-capture-cursor`). The browser keeps the **local** OS cursor visible over the video (`cursor: default`).
 
 Both machines must be on the same LAN (or a routed network that allows TCP 62000 plus the UDP ports WebRTC picks). No cloud relay is used.
 
@@ -138,7 +141,7 @@ web/                 vanilla HTML/JS/CSS client (embedded in the binary)
 - **Permissions are easy to get wrong.** If the picture is black, check Screen Recording. If the cursor does not move, check Accessibility.
 - **No clipboard, file transfer, audio, or multi-user control.**
 - A crashed viewer can hold the slot until ICE fails (a few seconds).
-- Cursor is drawn by ffmpeg (`-capture_cursor 1`); remote cursor hiding on the Mac is not implemented.
+- The remote Mac pointer is omitted from the capture by default; the client shows the local cursor. Pass `-capture-cursor` to burn the host pointer into the video instead.
 
 ## License
 

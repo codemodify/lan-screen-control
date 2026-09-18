@@ -24,6 +24,7 @@ func main() {
 	width := flag.Int("width", 1280, "encoded canvas width in pixels (0 with -height 0 = even native)")
 	height := flag.Int("height", 720, "encoded canvas height in pixels (0 with -width 0 = even native)")
 	encoder := flag.String("encoder", "libx264", "H.264 encoder: libx264 (default) or videotoolbox (macOS)")
+	captureCursor := flag.Bool("capture-cursor", false, "include the macOS pointer in the captured video")
 	stun := flag.String("stun", "stun:stun.l.google.com:19302", "optional STUN URL; empty disables STUN")
 	listDevices := flag.Bool("list-devices", false, "print ffmpeg capture devices and exit")
 	flag.Parse()
@@ -41,12 +42,13 @@ func main() {
 
 	hub, err := rdp.NewHub(rdp.Config{
 		Source: capture.New(capture.Config{
-			FFmpeg:  *ffmpeg,
-			FPS:     *fps,
-			Width:   *width,
-			Height:  *height,
-			Device:  *device,
-			Encoder: *encoder,
+			FFmpeg:        *ffmpeg,
+			FPS:           *fps,
+			Width:         *width,
+			Height:        *height,
+			Device:        *device,
+			Encoder:       *encoder,
+			CaptureCursor: *captureCursor,
 		}),
 		Input: input.New(),
 		STUN:  *stun,
@@ -69,6 +71,7 @@ func main() {
 		"width", *width,
 		"height", *height,
 		"encoder", *encoder,
+		"capture_cursor", *captureCursor,
 	)
 	slog.Info("grant Screen Recording + Accessibility to this process (or to Terminal) on macOS")
 

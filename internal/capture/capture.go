@@ -28,12 +28,13 @@ const (
 
 // Config selects how ffmpeg grabs and encodes the primary display.
 type Config struct {
-	FFmpeg  string // path to ffmpeg (default "ffmpeg")
-	FPS     int
-	Width   int    // encoded canvas width; 0 with Height 0 = even native
-	Height  int    // encoded canvas height; 0 with Width 0 = even native
-	Device  string // AVFoundation video index; screen is usually "1"
-	Encoder string // libx264 (default) or videotoolbox (macOS)
+	FFmpeg        string // path to ffmpeg (default "ffmpeg")
+	FPS           int
+	Width         int    // encoded canvas width; 0 with Height 0 = even native
+	Height        int    // encoded canvas height; 0 with Width 0 = even native
+	Device        string // AVFoundation video index; screen is usually "1"
+	Encoder       string // libx264 (default) or videotoolbox (macOS)
+	CaptureCursor bool   // draw the host pointer into the video (default false)
 }
 
 // Source writes H.264 access units until the context is cancelled.
@@ -140,7 +141,7 @@ func (c Config) Args() []string {
 	case "darwin":
 		args = append(args,
 			"-f", "avfoundation",
-			"-capture_cursor", "1",
+			"-capture_cursor", c.captureCursorArg(),
 			"-framerate", fps,
 			"-i", c.Device+":none",
 		)
@@ -214,6 +215,13 @@ func (c Config) scaleFilter() string {
 			w, h, w, h,
 		)
 	}
+}
+
+func (c Config) captureCursorArg() string {
+	if c.CaptureCursor {
+		return "1"
+	}
+	return "0"
 }
 
 func even(n int) int {

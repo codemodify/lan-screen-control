@@ -51,6 +51,15 @@ func TestVideotoolboxEncoderSelection(t *testing.T) {
 	}
 }
 
+func TestCaptureCursorDefaultOff(t *testing.T) {
+	if (Config{}).captureCursorArg() != "0" {
+		t.Fatal("host cursor must be omitted from the capture by default")
+	}
+	if (Config{CaptureCursor: true}).captureCursorArg() != "1" {
+		t.Fatal("-capture-cursor should pass 1 to ffmpeg")
+	}
+}
+
 func TestEncoderAlias(t *testing.T) {
 	if (Config{Encoder: "x264"}).normalized().Encoder != EncoderLibx264 {
 		t.Fatal("x264 should alias to libx264")
