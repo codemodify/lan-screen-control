@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>LAN Screen Control</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div id="stage">
+    <video id="screen" autoplay playsinline muted></video>
+    <div id="placeholder">
+      <p class="title">Remote Mac display</p>
+      <p class="hint" id="placeholder-hint">Connecting…</p>
+    </div>
+    <header id="hud">
+      <div id="status" class="pill idle" data-state="idle">idle</div>
+      <div class="hud-actions">
+        <button type="button" id="btn-connect">Connect</button>
+        <button type="button" id="btn-disconnect" hidden>Disconnect</button>
+        <button type="button" id="btn-fs" title="Fullscreen">Fullscreen</button>
+      </div>
+    </header>
+    <div id="banner" hidden></div>
+    <p id="focus-hint" hidden>Click the screen to send keyboard input</p>
+  </div>
+  <script src="app.js"></script>
+</body>
+</html>

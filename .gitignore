@@ -1,0 +1,9 @@
+/server
+/lan-screen-control
+/cmd/server/server
+/dist/
+*.exe
+*.test
+.DS_Store
+.idea/
+.vscode/
