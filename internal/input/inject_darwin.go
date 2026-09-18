@@ -121,11 +121,18 @@ import (
 
 // New returns a CoreGraphics injector. Accessibility permission is required.
 func New() Injector {
-	return &darwinInjector{flags: 0}
+	return NewWithFrame(0, 0)
+}
+
+// NewWithFrame is New plus the encoded canvas size used when both -width and
+// -height are set (ffmpeg letterbox). Zero frame size means native aspect.
+func NewWithFrame(frameW, frameH int) Injector {
+	return &darwinInjector{frameW: evenDim(frameW), frameH: evenDim(frameH)}
 }
 
 type darwinInjector struct {
-	flags uint64
+	flags          uint64
+	frameW, frameH int
 }
 
 func (d *darwinInjector) DisplaySize() (int, int) {
@@ -142,7 +149,7 @@ func (d *darwinInjector) DisplaySize() (int, int) {
 
 func (d *darwinInjector) Apply(ev protocol.Event) {
 	w, h := d.DisplaySize()
-	x, y := MapPoint(ev.X, ev.Y, w, h)
+	x, y := MapPointFromFrame(ev.X, ev.Y, w, h, d.frameW, d.frameH)
 
 	switch ev.Type {
 	case protocol.TypeMouseMove:

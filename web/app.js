@@ -51,12 +51,36 @@
     dc.send(JSON.stringify(payload));
   };
 
+  const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
+
+  // object-fit:contain letterboxes the decoded picture *inside* the <video>
+  // box. Normalize against videoWidth x videoHeight, not the element rect.
+  const containNorm = (px, py, boxW, boxH, srcW, srcH) => {
+    if (boxW <= 0 || boxH <= 0) return { x: 0, y: 0 };
+    if (srcW <= 0 || srcH <= 0) {
+      return { x: clamp01(px / boxW), y: clamp01(py / boxH) };
+    }
+    const scale = Math.min(boxW / srcW, boxH / srcH);
+    const w = srcW * scale;
+    const h = srcH * scale;
+    const left = (boxW - w) / 2;
+    const top = (boxH - h) / 2;
+    return {
+      x: clamp01((px - left) / w),
+      y: clamp01((py - top) / h),
+    };
+  };
+
   const point = (ev) => {
     const rect = video.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return { x: 0, y: 0 };
-    const x = (ev.clientX - rect.left) / rect.width;
-    const y = (ev.clientY - rect.top) / rect.height;
-    return { x, y };
+    return containNorm(
+      ev.clientX - rect.left,
+      ev.clientY - rect.top,
+      rect.width,
+      rect.height,
+      video.videoWidth,
+      video.videoHeight,
+    );
   };
 
   const attachInput = () => {

@@ -37,6 +37,49 @@ func TestMapPointClamps(t *testing.T) {
 	}
 }
 
+func TestContainRect1680x1050In1280x720(t *testing.T) {
+	x, y, w, h := ContainRect(1280, 720, 1680, 1050)
+	if y != 0 || h != 720 {
+		t.Fatalf("16:10 in 16:9 should be pillarboxed: y=%v h=%v", y, h)
+	}
+	if abs(w-1152) > 0.01 || abs(x-64) > 0.01 {
+		t.Fatalf("content rect want 64,0,1152,720 got %v,%v,%v,%v", x, y, w, h)
+	}
+}
+
+func TestMapPointFromFrameUnpadsLetterbox(t *testing.T) {
+	// Encoded 1280x720 with a 1680x1050 display (pillarbox).
+	cx, cy := MapPointFromFrame(0.5, 0.5, 1680, 1050, 1280, 720)
+	if abs(cx-840) > 0.5 || abs(cy-525) > 0.5 {
+		t.Fatalf("frame center should be display center, got %v,%v", cx, cy)
+	}
+
+	// Left pad (x=32/1280) must clamp to the left edge of the desktop.
+	lx, ly := MapPointFromFrame(32.0/1280.0, 0.5, 1680, 1050, 1280, 720)
+	if lx != 0 || abs(ly-525) > 0.5 {
+		t.Fatalf("left pad should map to x=0, got %v,%v", lx, ly)
+	}
+
+	// Left edge of the picture (x=64/1280) is display x=0.
+	px, py := MapPointFromFrame(64.0/1280.0, 0, 1680, 1050, 1280, 720)
+	if abs(px) > 0.5 || abs(py) > 0.5 {
+		t.Fatalf("content origin should be display origin, got %v,%v", px, py)
+	}
+
+	// Native (no pad): identity.
+	nx, ny := MapPointFromFrame(0.25, 0.8, 1680, 1050, 0, 0)
+	if abs(nx-420) > 0.01 || abs(ny-840) > 0.01 {
+		t.Fatalf("native map: got %v,%v", nx, ny)
+	}
+}
+
+func abs(v float64) float64 {
+	if v < 0 {
+		return -v
+	}
+	return v
+}
+
 func TestModifierFlag(t *testing.T) {
 	if modifierFlag("ShiftLeft") == 0 || modifierFlag("KeyA") != 0 {
 		t.Fatal("modifier flags look wrong")

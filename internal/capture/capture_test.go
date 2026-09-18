@@ -36,6 +36,19 @@ func TestScaleFilterEvenNative(t *testing.T) {
 	if !strings.Contains(got, "trunc(iw/2)*2") || !strings.Contains(got, "format=yuv420p") {
 		t.Fatalf("native scale should force even yuv420p, got %q", got)
 	}
+	if strings.Contains(got, "pad=") {
+		t.Fatalf("native default must not letterbox, got %q", got)
+	}
+}
+
+func TestDefaultArgsHaveNoPad(t *testing.T) {
+	joined := strings.Join((Config{}).Args(), " ")
+	if strings.Contains(joined, "pad=") {
+		t.Fatalf("default encode must keep native aspect, got %q", joined)
+	}
+	if !strings.Contains(joined, "trunc(iw/2)*2") {
+		t.Fatalf("default encode should even-round native size, got %q", joined)
+	}
 }
 
 func TestVideotoolboxEncoderSelection(t *testing.T) {

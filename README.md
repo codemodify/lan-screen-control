@@ -74,14 +74,14 @@ Useful flags:
 | `-ffmpeg` | `ffmpeg` | ffmpeg binary |
 | `-device` | `1` | AVFoundation video index |
 | `-fps` | `20` | Capture frame rate |
-| `-width` | `1280` | Encoded canvas width (`0` with `-height 0` = even native) |
-| `-height` | `720` | Encoded canvas height (`0` with `-width 0` = even native) |
+| `-width` | `0` | Encoded canvas width (`0` = even native aspect; pad only if `-height` is also set) |
+| `-height` | `0` | Encoded canvas height (`0` = even native aspect; pad only if `-width` is also set) |
 | `-encoder` | `libx264` | `libx264` (default, WebRTC-friendly) or `videotoolbox` (macOS) |
 | `-capture-cursor` | `false` | Include the macOS pointer in the captured video (`ffmpeg -capture_cursor 1`) |
 | `-stun` | `stun:stun.l.google.com:19302` | Optional STUN; empty disables it |
 | `-list-devices` | | Print ffmpeg devices and exit |
 
-The default canvas is **1280×720** with aspect-preserving scale + letterbox pad (even dimensions, `yuv420p`). Native Retina sizes often confuse software encoders; use `-width 0 -height 0` only if you need full resolution.
+The default encode is **even native resolution** (same aspect as the display, no letterbox pad) so click coordinates match `CGDisplayBounds`. The browser maps pointer events into the `object-fit: contain` picture (`videoWidth` × `videoHeight`), not the full `<video>` element box. Setting both `-width` and `-height` letterboxes to that canvas; the server then unpads clicks back onto the display. To reduce bitrate without changing aspect, set only one dimension (for example `-height 720`).
 
 ## Connect from a Linux browser
 
@@ -90,7 +90,7 @@ The default canvas is **1280×720** with aspect-preserving scale + letterbox pad
 
    `http://<mac-lan-ip>:62000/`
 
-3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events from the video surface.
+3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events from the video surface. Clicks are mapped into the contained picture (letterbox bars inside the video element are ignored).
 4. Use **Fullscreen** for a desktop-like layout. Click the video so keystrokes are captured.
 
 The Mac pointer is **not** burned into the video (`-capture_cursor 0` unless you pass `-capture-cursor`). The browser keeps the **local** OS cursor visible over the video (`cursor: default`).

@@ -21,8 +21,8 @@ func main() {
 	ffmpeg := flag.String("ffmpeg", "ffmpeg", "path to the ffmpeg binary")
 	device := flag.String("device", "1", "AVFoundation video device index (screen is usually 1)")
 	fps := flag.Int("fps", 20, "capture frame rate")
-	width := flag.Int("width", 1280, "encoded canvas width in pixels (0 with -height 0 = even native)")
-	height := flag.Int("height", 720, "encoded canvas height in pixels (0 with -width 0 = even native)")
+	width := flag.Int("width", 0, "encoded canvas width in pixels (0 = even native; pad only if height is also set)")
+	height := flag.Int("height", 0, "encoded canvas height in pixels (0 = even native; pad only if width is also set)")
 	encoder := flag.String("encoder", "libx264", "H.264 encoder: libx264 (default) or videotoolbox (macOS)")
 	captureCursor := flag.Bool("capture-cursor", false, "include the macOS pointer in the captured video")
 	stun := flag.String("stun", "stun:stun.l.google.com:19302", "optional STUN URL; empty disables STUN")
@@ -50,7 +50,7 @@ func main() {
 			Encoder:       *encoder,
 			CaptureCursor: *captureCursor,
 		}),
-		Input: input.New(),
+		Input: input.NewWithFrame(*width, *height),
 		STUN:  *stun,
 	})
 	if err != nil {
