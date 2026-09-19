@@ -55,6 +55,8 @@ Grant these to **the binary you run**, or to **Terminal / iTerm** if you launch 
 
 After changing permissions, quit and relaunch the server (and the terminal app, if that is what you authorized).
 
+On a native Mac build the server also calls the system APIs that show the Screen Recording and Accessibility prompts at startup. If you install a **LaunchAgent**, grant both permissions to the **`lan-screen-control` binary** itself (not only to Terminal)—launchd does not inherit Terminal’s TCC rights.
+
 ## Build and run on the Mac
 
 ```bash

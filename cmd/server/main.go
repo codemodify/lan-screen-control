@@ -28,6 +28,7 @@ func main() {
 	stun := flag.String("stun", "stun:stun.l.google.com:19302", "optional STUN URL; empty disables STUN")
 	listDevices := flag.Bool("list-devices", false, "print ffmpeg capture devices and exit")
 	flag.Parse()
+	input.RequestPermissions()
 
 	log := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
 	slog.SetDefault(log)
