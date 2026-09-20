@@ -130,3 +130,15 @@ button:hover { border-color: rgba(255, 255, 255, 0.28); }
 }
 
 #focus-hint[hidden] { display: none; }
+
+#btn-clip {
+  position: absolute;
+  bottom: 52px;
+  left: 50%;
+  transform: translateX(-50%);
+  pointer-events: auto;
+  color: var(--warn);
+  border-color: rgba(245, 193, 74, 0.45);
+}
+
+#btn-clip[hidden] { display: none; }
