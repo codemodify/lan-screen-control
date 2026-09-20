@@ -12,6 +12,7 @@
   const stage = document.getElementById("stage");
 
   const MAX_CLIP_BYTES = 1024 * 1024;
+  const LOCK_HINT = "If the screen is locked, click once then type your Mac password and press Enter (picture stays black until unlocked).";
 
   let pc = null;
   let dc = null;
@@ -79,6 +80,24 @@
   };
 
   const sessionLive = () => !!(dc && dc.readyState === "open");
+
+  const isHudControl = (el) =>
+    el === btnConnect || el === btnDisconnect || el === btnFs || el === btnClip;
+
+  const enableRemoteKeyboard = () => {
+    focusHint.textContent = LOCK_HINT;
+    focusHint.hidden = false;
+    video.tabIndex = 0;
+    video.focus({ preventScroll: true });
+  };
+
+  // Black frames are still a live remote surface: accept keys without waiting
+  // for a "looking live" picture (lock-screen capture is black by design).
+  const revealRemoteSurface = () => {
+    placeholder.classList.add("hidden");
+    video.classList.add("live");
+    enableRemoteKeyboard();
+  };
 
   const sendClipboard = (text) => {
     if (!sessionLive() || typeof text !== "string" || text === "") return;
@@ -259,6 +278,8 @@
       sendEvent({ t: "wh", x, y, dx: ev.deltaX, dy: ev.deltaY });
     };
     const onKey = (type) => (ev) => {
+      if (!sessionLive()) return;
+      if (isHudControl(ev.target) || ev.target === clipSink) return;
       if (isClipKey(ev)) {
         if (ev.code === "KeyV") {
           // Do not preventDefault: the paste event is the reliable HTTP path.
@@ -283,9 +304,14 @@
     });
     video.addEventListener("pointerup", onUp);
     video.addEventListener("wheel", onWheel, { passive: false });
-    video.addEventListener("keydown", onKey("kd"));
-    video.addEventListener("keyup", onKey("ku"));
+    // Page-level keys so a black / unfocused video still forwards typing.
+    document.addEventListener("keydown", onKey("kd"));
+    document.addEventListener("keyup", onKey("ku"));
     video.addEventListener("contextmenu", (ev) => ev.preventDefault());
+    stage.addEventListener("pointerdown", (ev) => {
+      if (!sessionLive() || isHudControl(ev.target)) return;
+      video.focus({ preventScroll: true });
+    });
   };
 
   const teardown = (status, label) => {
@@ -331,22 +357,21 @@
       sendEvent({ t: "cb-req" });
       startClipPoll();
       readAndSendLocal();
+      revealRemoteSurface();
     };
     dc.onmessage = (ev) => handleIncoming(ev.data);
     dc.onclose = stopClipPoll;
 
     pc.ontrack = (ev) => {
       video.srcObject = ev.streams[0] || new MediaStream([ev.track]);
-      video.classList.add("live");
-      placeholder.classList.add("hidden");
-      focusHint.hidden = false;
-      video.focus();
+      revealRemoteSurface();
     };
     pc.onconnectionstatechange = () => {
       const state = pc?.connectionState;
       if (state === "connected") {
         setStatus("connected", "connected");
         placeholderHint.textContent = "Connected";
+        revealRemoteSurface();
       } else if (state === "failed") {
         showBanner("WebRTC connection failed. Check that you can reach the Mac on UDP and that Screen Recording is allowed.");
         teardown("error", "failed");

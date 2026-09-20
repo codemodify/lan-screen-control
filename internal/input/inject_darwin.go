@@ -3,9 +3,15 @@
 package input
 
 /*
-#cgo LDFLAGS: -framework CoreGraphics -framework CoreFoundation
+#cgo LDFLAGS: -framework CoreGraphics -framework CoreFoundation -framework IOKit
 #include <CoreGraphics/CoreGraphics.h>
+#include <CoreFoundation/CoreFoundation.h>
+#include <IOKit/IOKitLib.h>
 #include <stdint.h>
+
+#ifndef kIOMainPortDefault
+#define kIOMainPortDefault kIOMasterPortDefault
+#endif
 
 static CGEventSourceRef src = NULL;
 static CGEventFlags flags = 0;
@@ -13,9 +19,58 @@ static int leftDown = 0;
 static int rightDown = 0;
 static int otherDown = 0;
 
+// Accessibility must be granted to the lan-screen-control binary (LaunchAgent).
+// HID tap is preferred; session tap is a lock-screen fallback for loginwindow.
+
+static int consoleLocked(void) {
+	CFDictionaryRef dict = CGSessionCopyCurrentDictionary();
+	if (dict) {
+		const void *val = CFDictionaryGetValue(dict, CFSTR("CGSSessionScreenIsLocked"));
+		int locked = (val && CFGetTypeID(val) == CFBooleanGetTypeID() && CFBooleanGetValue((CFBooleanRef)val));
+		CFRelease(dict);
+		if (locked) {
+			return 1;
+		}
+	}
+	io_service_t hid = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOHIDSystem"));
+	if (!hid) {
+		return 0;
+	}
+	CFTypeRef prop = IORegistryEntryCreateCFProperty(hid, CFSTR("IOConsoleLocked"), kCFAllocatorDefault, 0);
+	IOObjectRelease(hid);
+	if (!prop) {
+		return 0;
+	}
+	int locked = 0;
+	if (CFGetTypeID(prop) == CFBooleanGetTypeID()) {
+		locked = CFBooleanGetValue((CFBooleanRef)prop);
+	} else if (CFGetTypeID(prop) == CFNumberGetTypeID()) {
+		int n = 0;
+		CFNumberGetValue((CFNumberRef)prop, kCFNumberIntType, &n);
+		locked = n != 0;
+	}
+	CFRelease(prop);
+	return locked;
+}
+
 static void ensureSource(void) {
 	if (src == NULL) {
 		src = CGEventSourceCreate(kCGEventSourceStateHIDSystemState);
+		if (src) {
+			CGEventSourceSetLocalEventsSuppressionInterval(src, 0);
+		}
+	}
+}
+
+// postEvent prefers the HID tap (reaches loginwindow when trusted). If the
+// console is locked, also post at the session tap as a fallback.
+static void postEvent(CGEventRef e) {
+	if (!e) {
+		return;
+	}
+	CGEventPost(kCGHIDEventTap, e);
+	if (consoleLocked()) {
+		CGEventPost(kCGSessionEventTap, e);
 	}
 }
 
@@ -42,7 +97,7 @@ void LSCMove(double x, double y) {
 	CGEventRef e = CGEventCreateMouseEvent(src, type, p, btn);
 	if (e) {
 		CGEventSetFlags(e, flags);
-		CGEventPost(kCGHIDEventTap, e);
+		postEvent(e);
 		CFRelease(e);
 	}
 }
@@ -74,7 +129,7 @@ void LSCButton(double x, double y, int button, int down) {
 	if (e) {
 		CGEventSetFlags(e, flags);
 		CGEventSetIntegerValueField(e, kCGMouseEventClickState, 1);
-		CGEventPost(kCGHIDEventTap, e);
+		postEvent(e);
 		CFRelease(e);
 	}
 }
@@ -86,7 +141,7 @@ void LSCScroll(double x, double y, int32_t dx, int32_t dy) {
 	CGEventRef e = CGEventCreateScrollWheelEvent(src, kCGScrollEventUnitPixel, 2, dy, dx);
 	if (e) {
 		CGEventSetFlags(e, flags);
-		CGEventPost(kCGHIDEventTap, e);
+		postEvent(e);
 		CFRelease(e);
 	}
 }
@@ -96,7 +151,8 @@ void LSCKey(uint16_t keyCode, int down) {
 	CGEventRef e = CGEventCreateKeyboardEvent(src, (CGKeyCode)keyCode, down ? 1 : 0);
 	if (e) {
 		CGEventSetFlags(e, flags);
-		CGEventPost(kCGHIDEventTap, e);
+		CGEventSetIntegerValueField(e, kCGKeyboardEventAutorepeat, 0);
+		postEvent(e);
 		CFRelease(e);
 	}
 }
@@ -110,16 +166,34 @@ int LSCDisplayHeight(void) {
 	CGRect b = CGDisplayBounds(CGMainDisplayID());
 	return (int)b.size.height;
 }
+
+void LSCPasswordFieldPoint(double *x, double *y) {
+	CGRect b = CGDisplayBounds(CGMainDisplayID());
+	if (x) {
+		*x = b.origin.x + b.size.width * 0.50;
+	}
+	if (y) {
+		*y = b.origin.y + b.size.height * 0.58;
+	}
+}
+
+int LSCConsoleLocked(void) {
+	return consoleLocked();
+}
 */
 import "C"
 
 import (
 	"log/slog"
+	"sync"
+	"time"
 
 	"github.com/codemodify/lan-screen-control/internal/protocol"
 )
 
-// New returns a CoreGraphics injector. Accessibility permission is required.
+// New returns a CoreGraphics injector. Accessibility must be granted to the
+// lan-screen-control binary (or to Terminal if you launch from a shell).
+// A LaunchAgent does not inherit Terminal's TCC rights.
 func New() Injector {
 	return NewWithFrame(0, 0)
 }
@@ -133,6 +207,9 @@ func NewWithFrame(frameW, frameH int) Injector {
 type darwinInjector struct {
 	flags          uint64
 	frameW, frameH int
+
+	prepMu        sync.Mutex
+	lastLockClick time.Time
 }
 
 func (d *darwinInjector) DisplaySize() (int, int) {
@@ -185,6 +262,33 @@ func (d *darwinInjector) Apply(ev protocol.Event) {
 		}
 		C.LSCKey(C.uint16_t(code), cDown)
 	}
+}
+
+// PrepareForRemote left-clicks the lock-screen password field after the
+// session-accept wake so remote keystrokes can land without a visible picture.
+func (d *darwinInjector) PrepareForRemote() {
+	d.prepMu.Lock()
+	defer d.prepMu.Unlock()
+	if C.LSCConsoleLocked() == 0 {
+		return
+	}
+	if !d.lastLockClick.IsZero() && time.Since(d.lastLockClick) < 1500*time.Millisecond {
+		return
+	}
+	// Short pause so loginwindow can present the password field after wake.
+	time.Sleep(200 * time.Millisecond)
+	if C.LSCConsoleLocked() == 0 {
+		return
+	}
+	var x, y C.double
+	C.LSCPasswordFieldPoint(&x, &y)
+	C.LSCMove(x, y)
+	time.Sleep(80 * time.Millisecond)
+	C.LSCButton(x, y, 0, 1)
+	time.Sleep(40 * time.Millisecond)
+	C.LSCButton(x, y, 0, 0)
+	d.lastLockClick = time.Now()
+	slog.Info("console locked: clicked password-field region so remote typing can land")
 }
 
 // wheelSteps converts browser wheel deltas (typically ~100 per notch) into

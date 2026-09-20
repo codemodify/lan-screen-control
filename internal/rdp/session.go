@@ -55,6 +55,7 @@ type Session struct {
 	disc    *time.Timer
 
 	releaseDisplay func()
+	hostInput      input.Injector
 }
 
 // NewHub builds the media API and empty session slot.
@@ -140,9 +141,11 @@ func (h *Hub) start(offer webrtc.SessionDescription) (*Session, *webrtc.SessionD
 	go drainRTCP(rtpSender)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	sess := &Session{pc: pc, cancel: cancel, done: make(chan struct{})}
+	sess := &Session{pc: pc, cancel: cancel, done: make(chan struct{}), hostInput: h.cfg.Input}
 	// Hold display-sleep prevention for the life of this session only.
 	sess.releaseDisplay = power.PreventDisplaySleep()
+	// After wake-display: if the console is locked, click the password field.
+	go sess.prepareLockedInput()
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		slog.Info("data channel open", "label", dc.Label())
@@ -271,6 +274,7 @@ func (s *Session) onPeerState(state webrtc.PeerConnectionState) {
 			s.disc.Stop()
 			s.disc = nil
 		}
+		go s.prepareLockedInput()
 	case webrtc.PeerConnectionStateDisconnected:
 		startGrace = s.disc == nil
 	case webrtc.PeerConnectionStateFailed, webrtc.PeerConnectionStateClosed:
@@ -287,6 +291,13 @@ func (s *Session) onPeerState(state webrtc.PeerConnectionState) {
 	if doClose {
 		s.close()
 	}
+}
+
+func (s *Session) prepareLockedInput() {
+	if s == nil || s.hostInput == nil {
+		return
+	}
+	s.hostInput.PrepareForRemote()
 }
 
 func (s *Session) close() {

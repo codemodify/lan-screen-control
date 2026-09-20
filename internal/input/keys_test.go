@@ -85,3 +85,21 @@ func TestModifierFlag(t *testing.T) {
 		t.Fatal("modifier flags look wrong")
 	}
 }
+
+func TestPasswordFieldPoint(t *testing.T) {
+	x, y := PasswordFieldPoint(1680, 1050)
+	if abs(x-840) > 0.01 {
+		t.Fatalf("password field x should be display center, got %v", x)
+	}
+	if y < 1050*0.5 || y > 1050*0.7 {
+		t.Fatalf("password field y should sit below center, got %v", y)
+	}
+	zx, zy := PasswordFieldPoint(0, 0)
+	if zx != 0 || zy != 0 {
+		t.Fatalf("zero display should map to origin, got %v,%v", zx, zy)
+	}
+}
+
+func TestStubPrepareForRemote(t *testing.T) {
+	New().PrepareForRemote()
+}
