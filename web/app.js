@@ -8,11 +8,26 @@
   const btnConnect = document.getElementById("btn-connect");
   const btnDisconnect = document.getElementById("btn-disconnect");
   const btnFs = document.getElementById("btn-fs");
+  const btnClip = document.getElementById("btn-clip");
   const stage = document.getElementById("stage");
+
+  const MAX_CLIP_BYTES = 1024 * 1024;
 
   let pc = null;
   let dc = null;
   let connecting = false;
+  let lastSentClip = "";
+  let lastAppliedClip = "";
+  let pendingLocalClip = "";
+  let clipReadDenied = false;
+  let clipTimer = null;
+  let lastRemotePasteAt = 0;
+
+  const clipSink = document.createElement("textarea");
+  clipSink.setAttribute("aria-hidden", "true");
+  clipSink.tabIndex = -1;
+  clipSink.style.cssText = "position:fixed;left:-9999px;top:0;opacity:0;height:1px;width:1px";
+  document.body.appendChild(clipSink);
 
   const setStatus = (state, label) => {
     statusEl.dataset.state = state;
@@ -49,6 +64,144 @@
   const sendEvent = (payload) => {
     if (!dc || dc.readyState !== "open") return;
     dc.send(JSON.stringify(payload));
+  };
+
+  const utf8Len = (s) => new TextEncoder().encode(s).length;
+
+  const hideClipApply = () => {
+    pendingLocalClip = "";
+    if (btnClip) btnClip.hidden = true;
+  };
+
+  const showClipApply = (text) => {
+    pendingLocalClip = text;
+    if (btnClip) btnClip.hidden = false;
+  };
+
+  const sessionLive = () => !!(dc && dc.readyState === "open");
+
+  const sendClipboard = (text) => {
+    if (!sessionLive() || typeof text !== "string" || text === "") return;
+    if (utf8Len(text) > MAX_CLIP_BYTES) {
+      console.warn("clipboard text exceeds 1MB; dropping");
+      return;
+    }
+    if (text === lastSentClip) return;
+    lastSentClip = text;
+    sendEvent({ t: "cb", d: text });
+  };
+
+  const execCopy = (text) => {
+    clipSink.value = text;
+    clipSink.focus({ preventScroll: true });
+    clipSink.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch (_) {
+      ok = false;
+    }
+    video.focus();
+    return ok;
+  };
+
+  const writeLocalClipboard = async (text) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(text);
+        hideClipApply();
+        return true;
+      } catch (_) {
+        /* need a user gesture */
+      }
+    }
+    if (execCopy(text)) {
+      hideClipApply();
+      return true;
+    }
+    showClipApply(text);
+    return false;
+  };
+
+  const applyRemoteClipboard = (text) => {
+    if (typeof text !== "string" || text === "") return;
+    if (utf8Len(text) > MAX_CLIP_BYTES) {
+      console.warn("remote clipboard exceeds 1MB; dropping");
+      return;
+    }
+    lastAppliedClip = text;
+    lastSentClip = text; // do not echo this text back to the Mac
+    writeLocalClipboard(text);
+  };
+
+  const applyPendingClip = () => {
+    if (!pendingLocalClip) return;
+    const text = pendingLocalClip;
+    writeLocalClipboard(text);
+  };
+
+  const readAndSendLocal = async () => {
+    if (!sessionLive() || clipReadDenied) return;
+    if (!navigator.clipboard || !navigator.clipboard.readText) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text && text !== lastAppliedClip) sendClipboard(text);
+    } catch (err) {
+      if (err && (err.name === "NotAllowedError" || err.name === "SecurityError")) {
+        clipReadDenied = true;
+      }
+    }
+  };
+
+  const injectMacCommand = (keyCode) => {
+    // Linux Ctrl+C/V must become Cmd+C/V on the Mac. Release Control first so
+    // the host does not see Control+Command.
+    sendEvent({ t: "ku", k: "ControlLeft" });
+    sendEvent({ t: "ku", k: "ControlRight" });
+    sendEvent({ t: "kd", k: "MetaLeft" });
+    sendEvent({ t: "kd", k: keyCode });
+    sendEvent({ t: "ku", k: keyCode });
+    sendEvent({ t: "ku", k: "MetaLeft" });
+  };
+
+  const isClipKey = (ev) =>
+    (ev.ctrlKey || ev.metaKey) &&
+    !ev.altKey &&
+    !ev.shiftKey &&
+    (ev.code === "KeyC" || ev.code === "KeyX" || ev.code === "KeyV");
+
+  const pasteToRemote = (text) => {
+    sendClipboard(text);
+    const now = Date.now();
+    if (now - lastRemotePasteAt < 250) return;
+    lastRemotePasteAt = now;
+    injectMacCommand("KeyV");
+  };
+
+  const startClipPoll = () => {
+    stopClipPoll();
+    clipTimer = setInterval(() => {
+      if (document.hasFocus()) readAndSendLocal();
+    }, 2000);
+  };
+
+  const stopClipPoll = () => {
+    if (clipTimer) {
+      clearInterval(clipTimer);
+      clipTimer = null;
+    }
+  };
+
+  const handleIncoming = (raw) => {
+    let msg;
+    try {
+      msg = JSON.parse(raw);
+    } catch (_) {
+      return;
+    }
+    if (msg && msg.t === "cb" && typeof msg.d === "string") {
+      applyRemoteClipboard(msg.d);
+    }
   };
 
   const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -106,12 +259,28 @@
       sendEvent({ t: "wh", x, y, dx: ev.deltaX, dy: ev.deltaY });
     };
     const onKey = (type) => (ev) => {
+      if (isClipKey(ev)) {
+        if (ev.code === "KeyV") {
+          // Do not preventDefault: the paste event is the reliable HTTP path.
+          if (type === "kd" && !ev.repeat) readAndSendLocal();
+          return;
+        }
+        ev.preventDefault();
+        if (type === "kd" && !ev.repeat) {
+          // Copy/cut on the Mac; pasteboard watcher pushes text back here.
+          injectMacCommand(ev.code);
+        }
+        return;
+      }
       ev.preventDefault();
       sendEvent({ t: type, k: ev.code, r: ev.repeat });
     };
 
     video.addEventListener("pointermove", onMove);
-    video.addEventListener("pointerdown", onDown);
+    video.addEventListener("pointerdown", (ev) => {
+      if (pendingLocalClip) applyPendingClip();
+      onDown(ev);
+    });
     video.addEventListener("pointerup", onUp);
     video.addEventListener("wheel", onWheel, { passive: false });
     video.addEventListener("keydown", onKey("kd"));
@@ -137,6 +306,11 @@
     btnConnect.hidden = false;
     btnDisconnect.hidden = true;
     focusHint.hidden = true;
+    stopClipPoll();
+    hideClipApply();
+    lastSentClip = "";
+    lastAppliedClip = "";
+    clipReadDenied = false;
     setStatus(status || "idle", label || "idle");
   };
 
@@ -153,6 +327,13 @@
     pc = new RTCPeerConnection({ iceServers });
     pc.addTransceiver("video", { direction: "recvonly" });
     dc = pc.createDataChannel("input", { ordered: true });
+    dc.onopen = () => {
+      sendEvent({ t: "cb-req" });
+      startClipPoll();
+      readAndSendLocal();
+    };
+    dc.onmessage = (ev) => handleIncoming(ev.data);
+    dc.onclose = stopClipPoll;
 
     pc.ontrack = (ev) => {
       video.srcObject = ev.streams[0] || new MediaStream([ev.track]);
@@ -210,6 +391,21 @@
 
   video.tabIndex = 0;
   attachInput();
+
+  document.addEventListener("paste", (ev) => {
+    if (!sessionLive()) return;
+    const text = ev.clipboardData ? ev.clipboardData.getData("text/plain") : "";
+    if (!text) return;
+    ev.preventDefault();
+    pasteToRemote(text);
+  });
+  document.addEventListener("copy", () => setTimeout(readAndSendLocal, 0));
+  document.addEventListener("cut", () => setTimeout(readAndSendLocal, 0));
+  window.addEventListener("focus", readAndSendLocal);
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") readAndSendLocal();
+  });
+  btnClip.addEventListener("click", applyPendingClip);
 
   btnConnect.addEventListener("click", connect);
   btnDisconnect.addEventListener("click", () => {

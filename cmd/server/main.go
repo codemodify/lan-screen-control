@@ -1,7 +1,8 @@
 // Command server is the LAN remote-desktop host.
 //
 // It captures the local screen (ffmpeg + H.264), serves a one-page WebRTC
-// client, and injects mouse/keyboard events on macOS.
+// client, injects mouse/keyboard events on macOS, and syncs plain-text
+// clipboard both ways while a session is connected.
 package main
 
 import (
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/codemodify/lan-screen-control/internal/capture"
+	"github.com/codemodify/lan-screen-control/internal/clipboard"
 	"github.com/codemodify/lan-screen-control/internal/input"
 	"github.com/codemodify/lan-screen-control/internal/rdp"
 )
@@ -51,8 +53,9 @@ func main() {
 			Encoder:       *encoder,
 			CaptureCursor: *captureCursor,
 		}),
-		Input: input.NewWithFrame(*width, *height),
-		STUN:  *stun,
+		Input:     input.NewWithFrame(*width, *height),
+		Clipboard: clipboard.New(),
+		STUN:      *stun,
 	})
 	if err != nil {
 		slog.Error("webrtc init", "err", err)

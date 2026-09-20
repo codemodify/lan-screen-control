@@ -14,6 +14,7 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/codemodify/lan-screen-control/internal/capture"
+	"github.com/codemodify/lan-screen-control/internal/clipboard"
 	"github.com/codemodify/lan-screen-control/internal/input"
 	"github.com/codemodify/lan-screen-control/internal/protocol"
 )
@@ -23,15 +24,17 @@ var ErrBusy = errors.New("another client is already connected")
 
 // Config wires capture, injection, and ICE for a Hub.
 type Config struct {
-	Source capture.Source
-	Input  input.Injector
-	STUN   string // empty disables STUN; host candidates are always gathered
+	Source    capture.Source
+	Input     input.Injector
+	Clipboard clipboard.Board // nil uses clipboard.New()
+	STUN      string          // empty disables STUN; host candidates are always gathered
 }
 
 // Hub allows exactly one concurrent WebRTC session.
 type Hub struct {
-	cfg Config
-	api *webrtc.API
+	cfg  Config
+	api  *webrtc.API
+	clip *clipboard.Sync
 
 	mu      sync.Mutex
 	current *Session
@@ -44,6 +47,9 @@ type Session struct {
 	done   chan struct{}
 	once   sync.Once
 
+	handleMu sync.Mutex
+	clipOnce sync.Once
+
 	stateMu sync.Mutex
 	disc    *time.Timer
 }
@@ -54,7 +60,11 @@ func NewHub(cfg Config) (*Hub, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Hub{cfg: cfg, api: api}, nil
+	board := cfg.Clipboard
+	if board == nil {
+		board = clipboard.New()
+	}
+	return &Hub{cfg: cfg, api: api, clip: clipboard.NewSync(board)}, nil
 }
 
 // Busy reports whether a session is currently holding the slot.
@@ -128,8 +138,13 @@ func (h *Hub) start(offer webrtc.SessionDescription) (*Session, *webrtc.SessionD
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		slog.Info("data channel open", "label", dc.Label())
+		dc.OnOpen(func() {
+			sess.startClipboardWatch(ctx, dc, h.clip)
+		})
 		dc.OnMessage(func(msg webrtc.DataChannelMessage) {
-			h.handleInput(msg.Data)
+			sess.handleMu.Lock()
+			defer sess.handleMu.Unlock()
+			h.handleInput(msg.Data, dc)
 		})
 	})
 
@@ -177,16 +192,66 @@ func (h *Hub) start(offer webrtc.SessionDescription) (*Session, *webrtc.SessionD
 	return sess, local, nil
 }
 
-func (h *Hub) handleInput(raw []byte) {
-	if h.cfg.Input == nil {
+func (s *Session) startClipboardWatch(ctx context.Context, dc *webrtc.DataChannel, clip *clipboard.Sync) {
+	if s == nil || clip == nil || dc == nil {
 		return
 	}
+	s.clipOnce.Do(func() {
+		go clip.Watch(ctx, func(text string) {
+			sendClipboard(dc, text)
+		})
+	})
+}
+
+func (h *Hub) handleInput(raw []byte, dc *webrtc.DataChannel) {
 	var ev protocol.Event
 	if err := json.Unmarshal(raw, &ev); err != nil {
 		slog.Debug("bad input event", "err", err)
 		return
 	}
-	h.cfg.Input.Apply(ev)
+	switch ev.Type {
+	case protocol.TypeClipboard:
+		if h.clip == nil {
+			return
+		}
+		if err := h.clip.ApplyRemote(ev.Data); err != nil && !errors.Is(err, clipboard.ErrTooLarge) {
+			slog.Debug("clipboard apply failed", "err", err)
+		}
+	case protocol.TypeClipboardReq:
+		h.pushClipboard(dc)
+	default:
+		if h.cfg.Input == nil {
+			return
+		}
+		h.cfg.Input.Apply(ev)
+	}
+}
+
+func (h *Hub) pushClipboard(dc *webrtc.DataChannel) {
+	if h.clip == nil {
+		return
+	}
+	text, ok := h.clip.Current()
+	if !ok {
+		return
+	}
+	sendClipboard(dc, text)
+}
+
+func sendClipboard(dc *webrtc.DataChannel, text string) {
+	if dc == nil || text == "" {
+		return
+	}
+	if dc.ReadyState() != webrtc.DataChannelStateOpen {
+		return
+	}
+	payload, err := json.Marshal(protocol.Event{Type: protocol.TypeClipboard, Data: text})
+	if err != nil {
+		return
+	}
+	if err := dc.Send(payload); err != nil {
+		slog.Debug("clipboard send failed", "err", err)
+	}
 }
 
 func (s *Session) onPeerState(state webrtc.PeerConnectionState) {
@@ -280,6 +345,8 @@ func newWebRTCAPI() (*webrtc.API, error) {
 	})
 	// Fail a vanished client quickly so the single session slot is released.
 	se.SetICETimeouts(4*time.Second, 8*time.Second, 2*time.Second)
+	// Clipboard payloads are capped at 1MiB; accept that on the SCTP side.
+	se.SetSCTPMaxMessageSize(clipboard.MaxTextBytes + 4096)
 
 	return webrtc.NewAPI(webrtc.WithMediaEngine(m), webrtc.WithSettingEngine(se)), nil
 }
