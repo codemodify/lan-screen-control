@@ -1,13 +1,27 @@
 // Package input injects remote pointer and keyboard events into the host OS.
 // The real implementation is macOS-only (CoreGraphics, requires Accessibility).
+//
+// When the server runs as a LaunchAgent, grant Accessibility to the
+// lan-screen-control binary itself — launchd does not inherit Terminal's TCC.
 package input
 
 import "github.com/codemodify/lan-screen-control/internal/protocol"
+
+// Normalized point used to focus the macOS lock-screen password field
+// (centered, slightly below the avatar / clock).
+const (
+	PasswordFieldX = 0.50
+	PasswordFieldY = 0.58
+)
 
 // Injector applies remote input to the local machine.
 type Injector interface {
 	Apply(ev protocol.Event)
 	DisplaySize() (width, height int)
+	// PrepareForRemote runs after the display is woken on session accept /
+	// connect. On macOS, if the console is locked it left-clicks the
+	// password-field region so blind typing can land. Stubs are no-ops.
+	PrepareForRemote()
 }
 
 // stubInjector is used on non-macOS builds and on darwin binaries compiled
@@ -22,6 +36,17 @@ func (s stubInjector) Apply(ev protocol.Event) {
 	// Intentionally empty: this host cannot inject into macOS.
 	_ = ev
 	_, _ = s.frameW, s.frameH
+}
+
+func (stubInjector) PrepareForRemote() {}
+
+// PasswordFieldPoint is the display-point click used to focus the lock-screen
+// password field. width/height are the main display size in points.
+func PasswordFieldPoint(width, height int) (x, y float64) {
+	if width <= 0 || height <= 0 {
+		return 0, 0
+	}
+	return float64(width) * PasswordFieldX, float64(height) * PasswordFieldY
 }
 
 func evenDim(n int) int {

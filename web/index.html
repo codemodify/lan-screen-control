@@ -8,7 +8,7 @@
 </head>
 <body>
   <div id="stage">
-    <video id="screen" autoplay playsinline muted></video>
+    <video id="screen" autoplay playsinline muted tabindex="0"></video>
     <div id="placeholder">
       <p class="title">Remote Mac display</p>
       <p class="hint" id="placeholder-hint">Connecting…</p>
@@ -22,7 +22,7 @@
       </div>
     </header>
     <div id="banner" hidden></div>
-    <p id="focus-hint" hidden>Click the screen to send keyboard input</p>
+    <p id="focus-hint" hidden>If the screen is locked, click once then type your Mac password and press Enter (picture stays black until unlocked).</p>
     <button type="button" id="btn-clip" hidden>Clipboard updated — click to apply</button>
   </div>
   <script src="app.js"></script>

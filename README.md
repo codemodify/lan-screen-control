@@ -26,7 +26,7 @@ On a native macOS build, accepting the session **wakes display sleep** and holds
 
 **Media:** ffmpeg captures the screen (`avfoundation` on macOS) and encodes **constrained-baseline H.264** (`libx264` by default: `yuv420p`, zerolatency, regular IDRs, `repeat-headers`, no slice threads). Access units (SPS/PPS + every slice of a picture) are assembled before each pion `WriteSample` so Chrome sees one complete frame per RTP timestamp. [pion/webrtc](https://github.com/pion/webrtc) packetizes those Annex-B AUs. On macOS you can try `-encoder videotoolbox` if `libx264` is a problem.
 
-**Input:** the browser posts pointer/keyboard events on a WebRTC data channel named `input`. On macOS the server injects them with CoreGraphics (`CGEventPost`). That requires **Accessibility** permission.
+**Input:** the browser posts pointer/keyboard events on a WebRTC data channel named `input`. On macOS the server injects them with CoreGraphics (`CGEventPost` to `kCGHIDEventTap`, with `kCGSessionEventTap` as a lock-screen fallback). That requires **Accessibility** permission on the **`lan-screen-control` binary** when you run as a LaunchAgent.
 
 **Clipboard:** the same `input` data channel carries plain-text UTF-8 (max 1 MiB). `{ "t": "cb", "d": "text…" }` sets the clipboard in either direction; `{ "t": "cb-req" }` asks the Mac to push whatever is on the pasteboard now. The host watches `NSPasteboard` `changeCount` (~250 ms) only while a session is connected and ignores its own writes so a local copy is not echoed back. Images and files are out of scope for v1.
 
@@ -60,7 +60,17 @@ Grant these to **the binary you run**, or to **Terminal / iTerm** if you launch 
 
 After changing permissions, quit and relaunch the server (and the terminal app, if that is what you authorized).
 
-On a native Mac build the server also calls the system APIs that show the Screen Recording and Accessibility prompts at startup. If you install a **LaunchAgent**, grant both permissions to the **`lan-screen-control` binary** itself (not only to Terminal)—launchd does not inherit Terminal’s TCC rights. Display wake on connect and clipboard sync both run in that same process.
+On a native Mac build the server also calls the system APIs that show the Screen Recording and Accessibility prompts at startup. If you install a **LaunchAgent**, grant both permissions to the **`lan-screen-control` binary** itself (not only to Terminal)—launchd does not inherit Terminal’s TCC rights. Display wake, lock-screen key injection, and clipboard sync all run in that same process.
+
+## Locked screen
+
+macOS does not allow Screen Recording to capture the lock UI, so the remote picture stays **black** until you unlock. That is by design — this project does not try to render lock-screen contents.
+
+Keyboard and click injection still work if **Accessibility** is granted to the **`lan-screen-control` binary**. On session accept / connect, after the display is woken, the server checks `IOConsoleLocked` / `CGSSessionScreenIsLocked` and left-clicks the password-field region of the main display so you can type blindly.
+
+In the browser: click the (black) video once, type the Mac login password, and press Enter. The picture stays black until the session unlocks. The page accepts keyboard focus even when frames look dead.
+
+If keys do not land, unlock the Mac **locally once** after granting Accessibility, then lock again — TCC sometimes only attaches after a local unlock.
 
 ## Display sleep vs system sleep
 
@@ -103,8 +113,8 @@ The default encode is **even native resolution** (same aspect as the display, no
 
    `http://<mac-lan-ip>:62000/`
 
-3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events from the video surface. Clicks are mapped into the contained picture (letterbox bars inside the video element are ignored).
-4. Use **Fullscreen** for a desktop-like layout. Click the video so keystrokes are captured.
+3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events. Keys are taken whenever the **page** has focus (not only when the video looks live). Clicks are mapped into the contained picture (letterbox bars inside the video element are ignored).
+4. Use **Fullscreen** for a desktop-like layout. If the Mac is locked the picture is black: click once, type the login password, press Enter.
 5. **Clipboard (plain text):**
    - Copy on Linux, then **Ctrl/Cmd+V** on the page to paste into the Mac app under the pointer (the client writes the Mac pasteboard, then injects ⌘V).
    - Copy on the Mac (Ctrl/Cmd+C from the page maps to ⌘C). The text is pushed to the browser clipboard so you can paste locally.
@@ -158,7 +168,7 @@ web/                 vanilla HTML/JS/CSS client (embedded in the binary)
 - **US-ANSI keycodes.** Physical keys are mapped from `KeyboardEvent.code` to macOS virtual key codes; other layouts may mis-fire punctuation.
 - **H.264 only.** The viewer browser must decode H.264 (typical for Chrome/Edge/Firefox). If the picture is a green rectangle with a thin strip of desktop, rebuild with this repo’s access-unit path (do not stream one NAL per sample).
 - **ffmpeg is required** on the Mac for capture + encode.
-- **Permissions are easy to get wrong.** If the picture is black, check Screen Recording. If the cursor does not move, check Accessibility.
+- **Permissions are easy to get wrong.** If the picture is black **while unlocked**, check Screen Recording. A **locked** Mac is black by design; type the password blindly. If the cursor does not move or keys do not land, grant Accessibility to the `lan-screen-control` binary (or unlock locally once).
 - **Display sleep is woken on connect; system sleep is not.** A dark-but-awake Mac lights up when a client takes the slot. A fully sleeping Mac (or one whose Wi‑Fi is off) will not come back by itself—use Energy Saver / WoL.
 - **No file transfer, audio, or multi-user control.** Clipboard is plain text only (no images/files), 1 MiB max, and only while a WebRTC session is connected.
 - A crashed viewer can hold the slot until ICE fails (a few seconds).

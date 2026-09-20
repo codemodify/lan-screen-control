@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 
 	"github.com/codemodify/lan-screen-control/internal/input"
+	"github.com/codemodify/lan-screen-control/internal/protocol"
 )
 
 type blockingSource struct{}
@@ -155,5 +158,60 @@ func TestIndexServed(t *testing.T) {
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("GET /: %d", res.StatusCode)
+	}
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(body, []byte("If the screen is locked")) {
+		t.Fatal("index should tell the user they can type the password on a black lock screen")
+	}
+
+	jsRes, err := http.Get(srv.URL + "/app.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer jsRes.Body.Close()
+	js, err := io.ReadAll(jsRes.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(js, []byte(`document.addEventListener("keydown"`)) {
+		t.Fatal("client must listen for keydown on the page, not only the video element")
+	}
+}
+
+type recordingInjector struct {
+	mu   sync.Mutex
+	prep int
+}
+
+func (r *recordingInjector) Apply(protocol.Event)    {}
+func (r *recordingInjector) DisplaySize() (int, int) { return 1920, 1080 }
+func (r *recordingInjector) PrepareForRemote()       { r.mu.Lock(); r.prep++; r.mu.Unlock() }
+func (r *recordingInjector) preps() int              { r.mu.Lock(); defer r.mu.Unlock(); return r.prep }
+
+func TestPrepareForRemoteOnAccept(t *testing.T) {
+	rec := &recordingInjector{}
+	hub, err := NewHub(Config{Source: blockingSource{}, Input: rec})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(Handler(hub))
+	t.Cleanup(srv.Close)
+
+	_, offer := offerer(t)
+	res := postSignal(t, srv, offer)
+	defer res.Body.Close()
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("signal: got %d", res.StatusCode)
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for rec.preps() == 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec.preps() == 0 {
+		t.Fatal("PrepareForRemote should run after session accept (after wake-display)")
 	}
 }
