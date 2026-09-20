@@ -15,6 +15,7 @@ import (
 
 	"github.com/codemodify/lan-screen-control/internal/capture"
 	"github.com/codemodify/lan-screen-control/internal/input"
+	"github.com/codemodify/lan-screen-control/internal/power"
 	"github.com/codemodify/lan-screen-control/internal/protocol"
 )
 
@@ -46,6 +47,8 @@ type Session struct {
 
 	stateMu sync.Mutex
 	disc    *time.Timer
+
+	releaseDisplay func()
 }
 
 // NewHub builds the media API and empty session slot.
@@ -93,6 +96,9 @@ func (h *Hub) AnswerOffer(offer webrtc.SessionDescription) (*webrtc.SessionDescr
 }
 
 func (h *Hub) start(offer webrtc.SessionDescription) (*Session, *webrtc.SessionDescription, error) {
+	// Pulse the display as soon as we take the slot so it is lit before ffmpeg.
+	power.WakeDisplay()
+
 	ice := webrtc.Configuration{}
 	if h.cfg.STUN != "" {
 		ice.ICEServers = []webrtc.ICEServer{{URLs: []string{h.cfg.STUN}}}
@@ -125,6 +131,8 @@ func (h *Hub) start(offer webrtc.SessionDescription) (*Session, *webrtc.SessionD
 
 	ctx, cancel := context.WithCancel(context.Background())
 	sess := &Session{pc: pc, cancel: cancel, done: make(chan struct{})}
+	// Hold display-sleep prevention for the life of this session only.
+	sess.releaseDisplay = power.PreventDisplaySleep()
 
 	pc.OnDataChannel(func(dc *webrtc.DataChannel) {
 		slog.Info("data channel open", "label", dc.Label())
@@ -227,6 +235,10 @@ func (s *Session) close() {
 			s.disc = nil
 		}
 		s.stateMu.Unlock()
+		if s.releaseDisplay != nil {
+			s.releaseDisplay()
+			s.releaseDisplay = nil
+		}
 		s.cancel()
 		_ = s.pc.Close()
 		close(s.done)

@@ -22,6 +22,8 @@ Linux browser  --HTTP POST SDP-->  Go server on Mac :62000
 
 The same process serves the client at `http://<mac-lan-ip>:62000/`.
 
+On a native macOS build, accepting the session **wakes display sleep** and holds the display awake until the client disconnects. That is not full system sleep; see [Display sleep vs system sleep](#display-sleep-vs-system-sleep).
+
 **Media:** ffmpeg captures the screen (`avfoundation` on macOS) and encodes **constrained-baseline H.264** (`libx264` by default: `yuv420p`, zerolatency, regular IDRs, `repeat-headers`, no slice threads). Access units (SPS/PPS + every slice of a picture) are assembled before each pion `WriteSample` so Chrome sees one complete frame per RTP timestamp. [pion/webrtc](https://github.com/pion/webrtc) packetizes those Annex-B AUs. On macOS you can try `-encoder videotoolbox` if `libx264` is a problem.
 
 **Input:** the browser posts pointer/keyboard events on a WebRTC data channel. On macOS the server injects them with CoreGraphics (`CGEventPost`). That requires **Accessibility** permission.
@@ -56,6 +58,12 @@ Grant these to **the binary you run**, or to **Terminal / iTerm** if you launch 
 After changing permissions, quit and relaunch the server (and the terminal app, if that is what you authorized).
 
 On a native Mac build the server also calls the system APIs that show the Screen Recording and Accessibility prompts at startup. If you install a **LaunchAgent**, grant both permissions to the **`lan-screen-control` binary** itself (not only to Terminal)—launchd does not inherit Terminal’s TCC rights.
+
+## Display sleep vs system sleep
+
+When a browser takes the single session, the Mac host **wakes the display** (if it went dark from idle / display sleep) and **keeps the display from sleeping** until that client disconnects. Wake uses IOKit `IOPMAssertionDeclareUserActivity` plus a 1-pixel cursor nudge (same CoreGraphics path as input injection); `caffeinate -u -t 1` is a fallback. While the slot is held, the server takes a `PreventUserIdleDisplaySleep` assertion (`caffeinate -d` if IOKit fails). After the peer disconnects, the assertion is released so the display can idle-sleep again.
+
+This is **display sleep only**, not full **system sleep**. If the Mac has already gone to system sleep, or Wi‑Fi has powered down, this process cannot wake the machine or the radio. In Energy Saver / Battery settings, prevent the Mac from sleeping while on a power adapter, or use Wake-on-LAN. A LaunchAgent still needs **Screen Recording** and **Accessibility** on the `lan-screen-control` binary (Accessibility so the cursor nudge is delivered).
 
 ## Build and run on the Mac
 
@@ -128,6 +136,7 @@ On Linux, `go build ./cmd/server` succeeds and the server will stream an ffmpeg 
 cmd/server/          entrypoint
 internal/capture/    ffmpeg screen capture → H.264
 internal/input/      macOS CoreGraphics injection
+internal/power/      macOS display wake + idle-sleep prevention
 internal/rdp/        single-client WebRTC + HTTP signaling
 internal/protocol/   data-channel event schema
 web/                 vanilla HTML/JS/CSS client (embedded in the binary)
@@ -141,6 +150,7 @@ web/                 vanilla HTML/JS/CSS client (embedded in the binary)
 - **H.264 only.** The viewer browser must decode H.264 (typical for Chrome/Edge/Firefox). If the picture is a green rectangle with a thin strip of desktop, rebuild with this repo’s access-unit path (do not stream one NAL per sample).
 - **ffmpeg is required** on the Mac for capture + encode.
 - **Permissions are easy to get wrong.** If the picture is black, check Screen Recording. If the cursor does not move, check Accessibility.
+- **Display sleep is woken on connect; system sleep is not.** A dark-but-awake Mac lights up when a client takes the slot. A fully sleeping Mac (or one whose Wi‑Fi is off) will not come back by itself—use Energy Saver / WoL.
 - **No clipboard, file transfer, audio, or multi-user control.**
 - A crashed viewer can hold the slot until ICE fails (a few seconds).
 - The remote Mac pointer is omitted from the capture by default; the client shows the local cursor. Pass `-capture-cursor` to burn the host pointer into the video instead.
