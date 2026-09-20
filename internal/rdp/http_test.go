@@ -191,6 +191,53 @@ func (r *recordingInjector) DisplaySize() (int, int) { return 1920, 1080 }
 func (r *recordingInjector) PrepareForRemote()       { r.mu.Lock(); r.prep++; r.mu.Unlock() }
 func (r *recordingInjector) preps() int              { r.mu.Lock(); defer r.mu.Unlock(); return r.prep }
 
+type captureInjector struct {
+	mu sync.Mutex
+	ev []protocol.Event
+}
+
+func (c *captureInjector) Apply(ev protocol.Event) {
+	c.mu.Lock()
+	c.ev = append(c.ev, ev)
+	c.mu.Unlock()
+}
+func (c *captureInjector) DisplaySize() (int, int) { return 1920, 1080 }
+func (c *captureInjector) PrepareForRemote()       {}
+func (c *captureInjector) events() []protocol.Event {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]protocol.Event, len(c.ev))
+	copy(out, c.ev)
+	return out
+}
+
+func TestHandleInputDeliversKeysWithoutVideo(t *testing.T) {
+	inj := &captureInjector{}
+	hub, err := NewHub(Config{Source: blockingSource{}, Input: inj})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// blockingSource never produces frames — keys must still be injected.
+	for _, raw := range [][]byte{
+		[]byte(`{"t":"kd","k":"KeyA"}`),
+		[]byte(`{"t":"ku","k":"KeyA"}`),
+		[]byte(`{"t":"kd","k":"Enter"}`),
+		[]byte(`{"t":"ku","k":"Enter"}`),
+	} {
+		hub.handleInput(raw, nil)
+	}
+	got := inj.events()
+	if len(got) != 4 {
+		t.Fatalf("want 4 key events, got %#v", got)
+	}
+	if got[0].Type != protocol.TypeKeyDown || got[0].Key != "KeyA" {
+		t.Fatalf("first event: %#v", got[0])
+	}
+	if got[2].Type != protocol.TypeKeyDown || got[2].Key != "Enter" {
+		t.Fatalf("enter down: %#v", got[2])
+	}
+}
+
 func TestPrepareForRemoteOnAccept(t *testing.T) {
 	rec := &recordingInjector{}
 	hub, err := NewHub(Config{Source: blockingSource{}, Input: rec})
