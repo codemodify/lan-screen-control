@@ -116,13 +116,24 @@ button:hover { border-color: rgba(255, 255, 255, 0.28); }
 
 #banner[hidden] { display: none; }
 
-#focus-hint {
+#lock-tools {
   position: absolute;
   bottom: 16px;
   left: 50%;
   transform: translateX(-50%);
-  margin: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
   max-width: min(640px, calc(100vw - 24px));
+  width: calc(100vw - 24px);
+  pointer-events: auto;
+}
+
+#lock-tools[hidden] { display: none; }
+
+#focus-hint {
+  margin: 0;
   text-align: center;
   line-height: 1.35;
   color: var(--muted);
@@ -132,11 +143,32 @@ button:hover { border-color: rgba(255, 255, 255, 0.28); }
   border-radius: 12px;
 }
 
-#focus-hint[hidden] { display: none; }
+#unlock-bar {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  width: 100%;
+}
+
+#unlock-pass {
+  appearance: none;
+  flex: 1;
+  max-width: 280px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+#unlock-pass:focus {
+  outline: none;
+  border-color: rgba(255, 255, 255, 0.28);
+}
 
 #btn-clip {
   position: absolute;
-  bottom: 52px;
+  bottom: 140px;
   left: 50%;
   transform: translateX(-50%);
   pointer-events: auto;

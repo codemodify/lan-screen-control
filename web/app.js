@@ -5,6 +5,10 @@
   const placeholder = document.getElementById("placeholder");
   const placeholderHint = document.getElementById("placeholder-hint");
   const focusHint = document.getElementById("focus-hint");
+  const lockTools = document.getElementById("lock-tools");
+  const unlockBar = document.getElementById("unlock-bar");
+  const unlockPass = document.getElementById("unlock-pass");
+  const btnUnlock = document.getElementById("btn-unlock");
   const btnConnect = document.getElementById("btn-connect");
   const btnDisconnect = document.getElementById("btn-disconnect");
   const btnFs = document.getElementById("btn-fs");
@@ -82,11 +86,33 @@
   const sessionLive = () => !!(dc && dc.readyState === "open");
 
   const isHudControl = (el) =>
-    el === btnConnect || el === btnDisconnect || el === btnFs || el === btnClip;
+    el === btnConnect ||
+    el === btnDisconnect ||
+    el === btnFs ||
+    el === btnClip ||
+    el === unlockPass ||
+    el === btnUnlock ||
+    (unlockBar && unlockBar.contains(el));
+
+  const printableKey = (key) => typeof key === "string" && key.length === 1;
+
+  const keyPayload = (type, ev) => {
+    const payload = { t: type, k: ev.code, r: ev.repeat };
+    if (printableKey(ev.key)) payload.c = ev.key;
+    return payload;
+  };
+
+  const sendPrintableBurst = (text) => {
+    for (const ch of text) {
+      if (!printableKey(ch)) continue;
+      sendEvent({ t: "kd", c: ch });
+      sendEvent({ t: "ku", c: ch });
+    }
+  };
 
   const enableRemoteKeyboard = () => {
-    focusHint.textContent = LOCK_HINT;
-    focusHint.hidden = false;
+    if (focusHint) focusHint.textContent = LOCK_HINT;
+    if (lockTools) lockTools.hidden = false;
     video.tabIndex = 0;
     video.focus({ preventScroll: true });
   };
@@ -294,7 +320,7 @@
         return;
       }
       ev.preventDefault();
-      sendEvent({ t: type, k: ev.code, r: ev.repeat });
+      sendEvent(keyPayload(type, ev));
     };
 
     video.addEventListener("pointermove", onMove);
@@ -331,7 +357,8 @@
     connecting = false;
     btnConnect.hidden = false;
     btnDisconnect.hidden = true;
-    focusHint.hidden = true;
+    if (lockTools) lockTools.hidden = true;
+    if (unlockPass) unlockPass.value = "";
     stopClipPoll();
     hideClipApply();
     lastSentClip = "";
@@ -431,6 +458,20 @@
     if (document.visibilityState === "visible") readAndSendLocal();
   });
   btnClip.addEventListener("click", applyPendingClip);
+
+  if (unlockBar) {
+    unlockBar.addEventListener("submit", (ev) => {
+      ev.preventDefault();
+      if (!sessionLive() || !unlockPass) return;
+      const password = unlockPass.value;
+      if (!password) return;
+      sendPrintableBurst(password);
+      sendEvent({ t: "kd", k: "Enter" });
+      sendEvent({ t: "ku", k: "Enter" });
+      unlockPass.value = "";
+      video.focus({ preventScroll: true });
+    });
+  }
 
   btnConnect.addEventListener("click", connect);
   btnDisconnect.addEventListener("click", () => {

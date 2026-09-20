@@ -26,7 +26,7 @@ On a native macOS build, accepting the session **wakes display sleep** and holds
 
 **Media:** ffmpeg captures the screen (`avfoundation` on macOS) and encodes **constrained-baseline H.264** (`libx264` by default: `yuv420p`, zerolatency, regular IDRs, `repeat-headers`, no slice threads). Access units (SPS/PPS + every slice of a picture) are assembled before each pion `WriteSample` so Chrome sees one complete frame per RTP timestamp. [pion/webrtc](https://github.com/pion/webrtc) packetizes those Annex-B AUs. On macOS you can try `-encoder videotoolbox` if `libx264` is a problem.
 
-**Input:** the browser posts pointer/keyboard events on a WebRTC data channel named `input`. On macOS the server injects them with CoreGraphics (`CGEventPost` to `kCGHIDEventTap`, with `kCGSessionEventTap` as a lock-screen fallback). That requires **Accessibility** permission on the **`lan-screen-control` binary** when you run as a LaunchAgent.
+**Input:** the browser posts pointer/keyboard events on a WebRTC data channel named `input`. On macOS the server injects them with CoreGraphics (`CGEventPost` to `kCGHIDEventTap`, with `kCGSessionEventTap` / `kCGAnnotatedSessionEventTap` as a lock-screen fallback). Printable keys include the character (`c`) as well as `KeyboardEvent.code` (`k`). On a **locked** console, printable characters are injected with `CGEventKeyboardSetUnicodeString` because Secure Input ignores synthetic virtual keycodes. That requires **Accessibility** permission on the **`lan-screen-control` binary** when you run as a LaunchAgent.
 
 **Clipboard:** the same `input` data channel carries plain-text UTF-8 (max 1 MiB). `{ "t": "cb", "d": "text…" }` sets the clipboard in either direction; `{ "t": "cb-req" }` asks the Mac to push whatever is on the pasteboard now. The host watches `NSPasteboard` `changeCount` (~250 ms) only while a session is connected and ignores its own writes so a local copy is not echoed back. Images and files are out of scope for v1.
 
@@ -66,9 +66,11 @@ On a native Mac build the server also calls the system APIs that show the Screen
 
 macOS does not allow Screen Recording to capture the lock UI, so the remote picture stays **black** until you unlock. That is by design — this project does not try to render lock-screen contents.
 
-Keyboard and click injection still work if **Accessibility** is granted to the **`lan-screen-control` binary**. On session accept / connect, after the display is woken, the server checks `IOConsoleLocked` / `CGSSessionScreenIsLocked` and left-clicks the password-field region of the main display so you can type blindly.
+Keyboard and click injection still work if **Accessibility** is granted to the **`lan-screen-control` binary**. Mouse clicks use the usual keycode/HID path (the password field can be focused). **Typing** on the lock screen uses **unicode injection** (`CGEventKeyboardSetUnicodeString` posted to the HID, session, and annotated-session taps) because Secure Input often ignores synthetic virtual keycodes. Enter, Escape, Tab, and Backspace still use keycodes, posted to those same taps while locked.
 
-In the browser: click the (black) video once, type the Mac login password, and press Enter. The picture stays black until the session unlocks. The page accepts keyboard focus even when frames look dead.
+On session accept / connect, after the display is woken, the server checks `IOConsoleLocked` / `CGSSessionScreenIsLocked` and left-clicks the password-field region of the main display so you can type blindly.
+
+In the browser: click the (black) video once, type the Mac login password, and press Enter — or use the **Unlock** field (password + Submit) to send the string as a unicode burst plus Enter. The picture stays black until the session unlocks. The page accepts keyboard focus even when frames look dead.
 
 If keys do not land, unlock the Mac **locally once** after granting Accessibility, then lock again — TCC sometimes only attaches after a local unlock.
 
@@ -114,7 +116,7 @@ The default encode is **even native resolution** (same aspect as the display, no
    `http://<mac-lan-ip>:62000/`
 
 3. The page auto-connects, plays the remote screen, and forwards pointer + keyboard events. Keys are taken whenever the **page** has focus (not only when the video looks live). Clicks are mapped into the contained picture (letterbox bars inside the video element are ignored).
-4. Use **Fullscreen** for a desktop-like layout. If the Mac is locked the picture is black: click once, type the login password, press Enter.
+4. Use **Fullscreen** for a desktop-like layout. If the Mac is locked the picture is black: click once, type the login password, press Enter (or use the Unlock field). Lock-screen typing uses unicode injection; Accessibility is still required.
 5. **Clipboard (plain text):**
    - Copy on Linux, then **Ctrl/Cmd+V** on the page to paste into the Mac app under the pointer (the client writes the Mac pasteboard, then injects ⌘V).
    - Copy on the Mac (Ctrl/Cmd+C from the page maps to ⌘C). The text is pushed to the browser clipboard so you can paste locally.
@@ -165,7 +167,7 @@ web/                 vanilla HTML/JS/CSS client (embedded in the binary)
 
 - **No authentication.** Anyone who can reach `:62000` on your LAN can take the first session and control the Mac. Use a trusted network only (or bind to a VPN interface via `-addr`).
 - **Primary display only.** No multi-monitor picker.
-- **US-ANSI keycodes.** Physical keys are mapped from `KeyboardEvent.code` to macOS virtual key codes; other layouts may mis-fire punctuation.
+- **US-ANSI keycodes when unlocked.** Physical keys are mapped from `KeyboardEvent.code` to macOS virtual key codes; other layouts may mis-fire punctuation. The lock screen uses the printable `c` character (unicode injection) so password punctuation matches what you typed.
 - **H.264 only.** The viewer browser must decode H.264 (typical for Chrome/Edge/Firefox). If the picture is a green rectangle with a thin strip of desktop, rebuild with this repo’s access-unit path (do not stream one NAL per sample).
 - **ffmpeg is required** on the Mac for capture + encode.
 - **Permissions are easy to get wrong.** If the picture is black **while unlocked**, check Screen Recording. A **locked** Mac is black by design; type the password blindly. If the cursor does not move or keys do not land, grant Accessibility to the `lan-screen-control` binary (or unlock locally once).

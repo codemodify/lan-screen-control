@@ -12,6 +12,7 @@ type Event struct {
 	DX     float64 `json:"dx,omitempty"`
 	DY     float64 `json:"dy,omitempty"`
 	Key    string  `json:"k,omitempty"`
+	Char   string  `json:"c,omitempty"` // printable character from KeyboardEvent.key (length 1)
 	Repeat bool    `json:"r,omitempty"`
 	Data   string  `json:"d,omitempty"`
 }

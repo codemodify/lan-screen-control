@@ -22,7 +22,13 @@
       </div>
     </header>
     <div id="banner" hidden></div>
-    <p id="focus-hint" hidden>If the screen is locked, click once then type your Mac password and press Enter (picture stays black until unlocked).</p>
+    <div id="lock-tools" hidden>
+      <p id="focus-hint">If the screen is locked, click once then type your Mac password and press Enter (picture stays black until unlocked).</p>
+      <form id="unlock-bar">
+        <input type="password" id="unlock-pass" name="unlock" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Mac password" />
+        <button type="submit" id="btn-unlock">Unlock</button>
+      </form>
+    </div>
     <button type="button" id="btn-clip" hidden>Clipboard updated — click to apply</button>
   </div>
   <script src="app.js"></script>

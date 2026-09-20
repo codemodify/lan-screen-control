@@ -179,6 +179,12 @@ func TestIndexServed(t *testing.T) {
 	if !bytes.Contains(js, []byte(`document.addEventListener("keydown"`)) {
 		t.Fatal("client must listen for keydown on the page, not only the video element")
 	}
+	if !bytes.Contains(js, []byte("printableKey")) || !bytes.Contains(js, []byte("payload.c")) {
+		t.Fatal("client must send printable character field c with key events")
+	}
+	if !bytes.Contains(body, []byte("id=\"unlock-bar\"")) || !bytes.Contains(js, []byte("sendPrintableBurst")) {
+		t.Fatal("client should expose an Unlock helper that bursts unicode + Enter")
+	}
 }
 
 type recordingInjector struct {
@@ -219,22 +225,26 @@ func TestHandleInputDeliversKeysWithoutVideo(t *testing.T) {
 	}
 	// blockingSource never produces frames — keys must still be injected.
 	for _, raw := range [][]byte{
-		[]byte(`{"t":"kd","k":"KeyA"}`),
-		[]byte(`{"t":"ku","k":"KeyA"}`),
+		[]byte(`{"t":"kd","k":"KeyA","c":"a"}`),
+		[]byte(`{"t":"ku","k":"KeyA","c":"a"}`),
 		[]byte(`{"t":"kd","k":"Enter"}`),
 		[]byte(`{"t":"ku","k":"Enter"}`),
+		[]byte(`{"t":"kd","c":"p"}`),
 	} {
 		hub.handleInput(raw, nil)
 	}
 	got := inj.events()
-	if len(got) != 4 {
-		t.Fatalf("want 4 key events, got %#v", got)
+	if len(got) != 5 {
+		t.Fatalf("want 5 key events, got %#v", got)
 	}
-	if got[0].Type != protocol.TypeKeyDown || got[0].Key != "KeyA" {
+	if got[0].Type != protocol.TypeKeyDown || got[0].Key != "KeyA" || got[0].Char != "a" {
 		t.Fatalf("first event: %#v", got[0])
 	}
-	if got[2].Type != protocol.TypeKeyDown || got[2].Key != "Enter" {
+	if got[2].Type != protocol.TypeKeyDown || got[2].Key != "Enter" || got[2].Char != "" {
 		t.Fatalf("enter down: %#v", got[2])
+	}
+	if got[4].Type != protocol.TypeKeyDown || got[4].Char != "p" || got[4].Key != "" {
+		t.Fatalf("char-only burst: %#v", got[4])
 	}
 }
 

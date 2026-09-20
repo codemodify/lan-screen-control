@@ -1,5 +1,54 @@
 package input
 
+import "unicode"
+
+// PrintableChar returns a single printable rune from a protocol `c` field.
+// Enter/Tab/Backspace and other named keys are rejected so they stay code-only.
+func PrintableChar(s string) string {
+	if s == "" {
+		return ""
+	}
+	rs := []rune(s)
+	if len(rs) != 1 {
+		return ""
+	}
+	r := rs[0]
+	if unicode.IsPrint(r) || r == ' ' {
+		return string(r)
+	}
+	return ""
+}
+
+// keyInjectPlan is how a remote key event is posted on macOS.
+type keyInjectPlan struct {
+	code    uint16
+	char    string
+	allTaps bool
+	unicode bool
+}
+
+// planKeyInject chooses virtual-keycode vs unicode injection.
+// Locked + printable uses CGEventKeyboardSetUnicodeString (Secure Input).
+// Locked Enter/Escape/Tab/Backspace stay on the keycode path, posted to all taps.
+func planKeyInject(locked bool, key, char string) (keyInjectPlan, bool) {
+	ch := PrintableChar(char)
+	code, ok := keyCode(key)
+	if locked && ch != "" {
+		p := keyInjectPlan{char: ch, allTaps: true, unicode: true}
+		if ok {
+			p.code = code
+		}
+		return p, true
+	}
+	if ok {
+		return keyInjectPlan{code: code, char: ch, allTaps: locked, unicode: ch != ""}, true
+	}
+	if ch != "" {
+		return keyInjectPlan{char: ch, allTaps: locked, unicode: true}, true
+	}
+	return keyInjectPlan{}, false
+}
+
 // keyCode maps a UI Events KeyboardEvent.code value to a macOS virtual key code
 // (ANSI / US layout, from HIToolbox/Events.h).
 func keyCode(code string) (uint16, bool) {
