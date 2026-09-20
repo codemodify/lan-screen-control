@@ -13,6 +13,8 @@ package input
 #define kIOMainPortDefault kIOMasterPortDefault
 #endif
 
+#include <stdlib.h>
+
 static CGEventSourceRef src = NULL;
 static CGEventFlags flags = 0;
 static int leftDown = 0;
@@ -146,15 +148,57 @@ void LSCScroll(double x, double y, int32_t dx, int32_t dy) {
 	}
 }
 
-void LSCKey(uint16_t keyCode, int down) {
+static void attachUnicode(CGEventRef e, const char *utf8) {
+	if (!e || !utf8 || !utf8[0]) {
+		return;
+	}
+	CFStringRef s = CFStringCreateWithCString(kCFAllocatorDefault, utf8, kCFStringEncodingUTF8);
+	if (!s) {
+		return;
+	}
+	CFIndex n = CFStringGetLength(s);
+	if (n > 0) {
+		if (n > 16) {
+			n = 16;
+		}
+		UniChar buf[16];
+		CFStringGetCharacters(s, CFRangeMake(0, n), buf);
+		CGEventKeyboardSetUnicodeString(e, (UniCharCount)n, buf);
+	}
+	CFRelease(s);
+}
+
+// postKeyEvent always hits the HID tap. When allTaps is set (locked console),
+// also post session + annotated session so Secure Input / loginwindow sees it.
+static void postKeyEvent(CGEventRef e, int allTaps) {
+	if (!e) {
+		return;
+	}
+	CGEventPost(kCGHIDEventTap, e);
+	if (allTaps) {
+		CGEventPost(kCGSessionEventTap, e);
+		CGEventPost(kCGAnnotatedSessionEventTap, e);
+	}
+}
+
+// LSCKeyUnicode posts a key event, optionally with a unicode string
+// (CGEventKeyboardSetUnicodeString). Secure Input on the lock screen
+// ignores virtual keycodes but accepts the unicode payload.
+void LSCKeyUnicode(uint16_t keyCode, const char *utf8, int down, int allTaps) {
 	ensureSource();
 	CGEventRef e = CGEventCreateKeyboardEvent(src, (CGKeyCode)keyCode, down ? 1 : 0);
-	if (e) {
-		CGEventSetFlags(e, flags);
-		CGEventSetIntegerValueField(e, kCGKeyboardEventAutorepeat, 0);
-		postEvent(e);
-		CFRelease(e);
+	if (!e) {
+		return;
 	}
+	CGEventSetFlags(e, flags);
+	CGEventSetIntegerValueField(e, kCGKeyboardEventAutorepeat, 0);
+	attachUnicode(e, utf8);
+	postKeyEvent(e, allTaps);
+	CFRelease(e);
+}
+
+void LSCKey(uint16_t keyCode, int down) {
+	LSCKeyUnicode(keyCode, NULL, down, 0);
 }
 
 int LSCDisplayWidth(void) {
@@ -187,6 +231,7 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+	"unsafe"
 
 	"github.com/codemodify/lan-screen-control/internal/protocol"
 )
@@ -210,6 +255,7 @@ type darwinInjector struct {
 
 	prepMu        sync.Mutex
 	lastLockClick time.Time
+	unicodeLog    sync.Once
 }
 
 func (d *darwinInjector) DisplaySize() (int, int) {
@@ -242,11 +288,6 @@ func (d *darwinInjector) Apply(ev protocol.Event) {
 		if ev.Repeat {
 			return
 		}
-		code, ok := keyCode(ev.Key)
-		if !ok {
-			slog.Debug("unmapped key", "code", ev.Key)
-			return
-		}
 		down := ev.Type == protocol.TypeKeyDown
 		if bit := modifierFlag(ev.Key); bit != 0 {
 			if down {
@@ -256,12 +297,39 @@ func (d *darwinInjector) Apply(ev protocol.Event) {
 			}
 			C.LSCSetFlags(C.uint64_t(d.flags))
 		}
-		var cDown C.int
-		if down {
-			cDown = 1
+		locked := C.LSCConsoleLocked() != 0
+		plan, ok := planKeyInject(locked, ev.Key, ev.Char)
+		if !ok {
+			slog.Debug("unmapped key", "code", ev.Key)
+			return
 		}
-		C.LSCKey(C.uint16_t(code), cDown)
+		if locked && plan.unicode && down {
+			d.unicodeLog.Do(func() {
+				slog.Info("console locked: injecting printable keys as unicode (Secure Input ignores virtual keycodes)")
+			})
+		}
+		char := ""
+		if plan.unicode {
+			char = plan.char
+		}
+		d.postKey(plan.code, char, down, plan.allTaps)
 	}
+}
+
+func (d *darwinInjector) postKey(code uint16, char string, down, allTaps bool) {
+	var cDown, cAll C.int
+	if down {
+		cDown = 1
+	}
+	if allTaps {
+		cAll = 1
+	}
+	var cChar *C.char
+	if char != "" {
+		cChar = C.CString(char)
+		defer C.free(unsafe.Pointer(cChar))
+	}
+	C.LSCKeyUnicode(C.uint16_t(code), cChar, cDown, cAll)
 }
 
 // PrepareForRemote left-clicks the lock-screen password field after the

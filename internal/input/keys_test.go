@@ -80,6 +80,75 @@ func abs(v float64) float64 {
 	return v
 }
 
+func TestPrintableChar(t *testing.T) {
+	cases := map[string]string{
+		"a":     "a",
+		"A":     "A",
+		"!":     "!",
+		" ":     " ",
+		"1":     "1",
+		"é":     "é",
+		"":      "",
+		"Enter": "",
+		"Tab":   "",
+		"ab":    "",
+		"\n":    "",
+		"\t":    "",
+	}
+	for in, want := range cases {
+		if got := PrintableChar(in); got != want {
+			t.Fatalf("PrintableChar(%q)=%q want %q", in, got, want)
+		}
+	}
+}
+
+func TestPlanKeyInjectLockedUnicode(t *testing.T) {
+	p, ok := planKeyInject(true, "KeyA", "a")
+	if !ok || !p.unicode || !p.allTaps || p.char != "a" || p.code != 0x00 {
+		t.Fatalf("locked printable: %+v ok=%v", p, ok)
+	}
+
+	p, ok = planKeyInject(true, "Digit1", "!")
+	if !ok || !p.unicode || p.char != "!" {
+		t.Fatalf("locked shifted digit: %+v ok=%v", p, ok)
+	}
+
+	// Unlock helper burst: character only, no KeyboardEvent.code.
+	p, ok = planKeyInject(true, "", "p")
+	if !ok || !p.unicode || !p.allTaps || p.char != "p" || p.code != 0 {
+		t.Fatalf("char-only burst: %+v ok=%v", p, ok)
+	}
+}
+
+func TestPlanKeyInjectLockedControlKeys(t *testing.T) {
+	for _, code := range []string{"Enter", "Escape", "Tab", "Backspace"} {
+		p, ok := planKeyInject(true, code, "")
+		if !ok || p.unicode || !p.allTaps {
+			t.Fatalf("%s should stay keycode+all taps: %+v ok=%v", code, p, ok)
+		}
+		want, mapped := keyCode(code)
+		if !mapped || p.code != want {
+			t.Fatalf("%s code: got 0x%02x want 0x%02x", code, p.code, want)
+		}
+	}
+}
+
+func TestPlanKeyInjectUnlockedKeycode(t *testing.T) {
+	p, ok := planKeyInject(false, "KeyA", "a")
+	if !ok || p.allTaps || p.code != 0x00 || p.char != "a" || !p.unicode {
+		t.Fatalf("unlocked printable should keep keycode and attach unicode: %+v ok=%v", p, ok)
+	}
+
+	p, ok = planKeyInject(false, "Enter", "")
+	if !ok || p.unicode || p.allTaps || p.code != 0x24 {
+		t.Fatalf("unlocked enter: %+v ok=%v", p, ok)
+	}
+
+	if _, ok := planKeyInject(false, "Unidentified", ""); ok {
+		t.Fatal("unmapped key without char should be dropped")
+	}
+}
+
 func TestModifierFlag(t *testing.T) {
 	if modifierFlag("ShiftLeft") == 0 || modifierFlag("KeyA") != 0 {
 		t.Fatal("modifier flags look wrong")

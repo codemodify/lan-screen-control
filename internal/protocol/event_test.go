@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -48,5 +49,63 @@ func TestMouseEventIgnoresMissingData(t *testing.T) {
 	}
 	if ev.Type != TypeMouseMove || ev.Data != "" || ev.X != 0.5 {
 		t.Fatalf("mouse decode: %+v", ev)
+	}
+}
+
+func TestKeyEventParsesPrintableChar(t *testing.T) {
+	var ev Event
+	if err := json.Unmarshal([]byte(`{"t":"kd","k":"KeyA","c":"a"}`), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Type != TypeKeyDown || ev.Key != "KeyA" || ev.Char != "a" {
+		t.Fatalf("key+char: %+v", ev)
+	}
+
+	shifted := Event{Type: TypeKeyDown, Key: "Digit1", Char: "!"}
+	out, err := json.Marshal(shifted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var back Event
+	if err := json.Unmarshal(out, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.Type != TypeKeyDown || back.Key != "Digit1" || back.Char != "!" {
+		t.Fatalf("marshal round-trip: %+v", back)
+	}
+}
+
+func TestKeyEventCharOnlyBurst(t *testing.T) {
+	var ev Event
+	if err := json.Unmarshal([]byte(`{"t":"kd","c":"p"}`), &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Type != TypeKeyDown || ev.Key != "" || ev.Char != "p" {
+		t.Fatalf("char-only burst: %+v", ev)
+	}
+}
+
+func TestKeyEventSpecialKeysStayCodeOnly(t *testing.T) {
+	for _, raw := range []string{
+		`{"t":"kd","k":"Enter"}`,
+		`{"t":"ku","k":"Tab"}`,
+		`{"t":"kd","k":"Backspace"}`,
+		`{"t":"kd","k":"Escape"}`,
+	} {
+		var ev Event
+		if err := json.Unmarshal([]byte(raw), &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Char != "" || ev.Key == "" {
+			t.Fatalf("special key should be code-only: %s -> %+v", raw, ev)
+		}
+	}
+
+	out, err := json.Marshal(Event{Type: TypeKeyDown, Key: "Enter"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(out); strings.Contains(got, `"c"`) {
+		t.Fatalf("Enter should omit empty c: %s", got)
 	}
 }
