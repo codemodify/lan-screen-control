@@ -1,6 +1,10 @@
 package input
 
-import "unicode"
+import (
+	"unicode"
+
+	"github.com/codemodify/lan-screen-control/internal/protocol"
+)
 
 // PrintableChar returns a single printable rune from a protocol `c` field.
 // Enter/Tab/Backspace and other named keys are rejected so they stay code-only.
@@ -82,6 +86,74 @@ const (
 	flagMaskAlternate  = 0x00080000
 	flagMaskCommand    = 0x00100000
 )
+
+// modifierLevelMask is the held-key flags a pointer event can correct.
+// Caps Lock is a toggle and is not part of the browser's ctrl/shift/alt/meta snapshot.
+const modifierLevelMask = flagMaskShift | flagMaskControl | flagMaskAlternate | flagMaskCommand
+
+// Quartz CGMouseButton values. These are not DOM button numbers:
+// DOM 0/1/2 = left/middle/right, Quartz 0/1/2 = left/right/center.
+const (
+	quartzButtonLeft   = 0 // kCGMouseButtonLeft
+	quartzButtonRight  = 1 // kCGMouseButtonRight
+	quartzButtonCenter = 2 // kCGMouseButtonCenter
+)
+
+// quartzButton maps a DOM PointerEvent.button to a CGMouseButton value.
+// 0 is left, 1 is middle, 2 is right. Any other value (including -1) is left.
+func quartzButton(dom int) int {
+	switch dom {
+	case 2:
+		return quartzButtonRight
+	case 1:
+		return quartzButtonCenter
+	default:
+		return quartzButtonLeft
+	}
+}
+
+// reconcilePointerMods replaces latched Shift/Control/Option/Command with the
+// modifiers the browser reported on a pointer event. Releases are the physical
+// key-up codes to post first (both sides) so a missed keyup cannot leave
+// Control down. macOS turns Control+left click into a context click.
+func reconcilePointerMods(flags uint64, mods int) (newFlags uint64, releases []string) {
+	want := cgFlagsForPointerMods(mods)
+	newFlags = (flags &^ modifierLevelMask) | want
+	stuck := flags & modifierLevelMask &^ want
+	type side struct {
+		bit   uint64
+		left  string
+		right string
+	}
+	for _, s := range []side{
+		{flagMaskShift, "ShiftLeft", "ShiftRight"},
+		{flagMaskControl, "ControlLeft", "ControlRight"},
+		{flagMaskAlternate, "AltLeft", "AltRight"},
+		{flagMaskCommand, "MetaLeft", "MetaRight"},
+	} {
+		if stuck&s.bit != 0 {
+			releases = append(releases, s.left, s.right)
+		}
+	}
+	return newFlags, releases
+}
+
+func cgFlagsForPointerMods(mods int) uint64 {
+	var f uint64
+	if mods&protocol.ModShift != 0 {
+		f |= flagMaskShift
+	}
+	if mods&protocol.ModCtrl != 0 {
+		f |= flagMaskControl
+	}
+	if mods&protocol.ModAlt != 0 {
+		f |= flagMaskAlternate
+	}
+	if mods&protocol.ModMeta != 0 {
+		f |= flagMaskCommand
+	}
+	return f
+}
 
 // macKeyCodes is the US-ANSI virtual key table.
 // Values match kVK_* constants in <HIToolbox/Events.h>.

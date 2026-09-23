@@ -96,6 +96,28 @@
 
   const printableKey = (key) => typeof key === "string" && key.length === 1;
 
+  // Must match protocol.Mod* (shift=1, ctrl=2, alt=4, meta=8).
+  const pointerMods = (ev) =>
+    (ev.shiftKey ? 1 : 0) |
+    (ev.ctrlKey ? 2 : 0) |
+    (ev.altKey ? 4 : 0) |
+    (ev.metaKey ? 8 : 0);
+
+  const modifierCodes = [
+    "ShiftLeft", "ShiftRight",
+    "ControlLeft", "ControlRight",
+    "AltLeft", "AltRight",
+    "MetaLeft", "MetaRight",
+  ];
+
+  const isModifierCode = (code) => modifierCodes.includes(code);
+
+  // Blur and tab switches drop keyup. Tell the Mac those modifiers are up
+  // so a stuck Control cannot turn later clicks into context clicks.
+  const releaseModifiers = () => {
+    for (const k of modifierCodes) sendEvent({ t: "ku", k });
+  };
+
   const keyPayload = (type, ev) => {
     const payload = { t: type, k: ev.code, r: ev.repeat };
     if (printableKey(ev.key)) payload.c = ev.key;
@@ -284,28 +306,40 @@
   const attachInput = () => {
     const onMove = (ev) => {
       const { x, y } = point(ev);
-      sendEvent({ t: "mm", x, y });
+      sendEvent({ t: "mm", x, y, m: pointerMods(ev) });
     };
     const onDown = (ev) => {
       ev.preventDefault();
       video.focus();
-      video.setPointerCapture?.(ev.pointerId);
+      try {
+        video.setPointerCapture?.(ev.pointerId);
+      } catch (_) {
+        /* capture is optional; it must not drop the click */
+      }
       const { x, y } = point(ev);
-      sendEvent({ t: "md", b: ev.button, x, y });
+      // b is DOM button (0 left, 1 middle, 2 right), not Quartz's numbering.
+      sendEvent({ t: "md", b: ev.button, x, y, m: pointerMods(ev) });
     };
     const onUp = (ev) => {
       ev.preventDefault();
       const { x, y } = point(ev);
-      sendEvent({ t: "mu", b: ev.button, x, y });
+      sendEvent({ t: "mu", b: ev.button, x, y, m: pointerMods(ev) });
     };
     const onWheel = (ev) => {
       ev.preventDefault();
       const { x, y } = point(ev);
-      sendEvent({ t: "wh", x, y, dx: ev.deltaX, dy: ev.deltaY });
+      sendEvent({ t: "wh", x, y, dx: ev.deltaX, dy: ev.deltaY, m: pointerMods(ev) });
     };
     const onKey = (type) => (ev) => {
       if (!sessionLive()) return;
-      if (isHudControl(ev.target) || ev.target === clipSink) return;
+      if (isHudControl(ev.target) || ev.target === clipSink) {
+        // Focus moved into the HUD before keyup (password field, clipboard
+        // sink). Still release remote modifiers or Control stays latched.
+        if (type === "ku" && isModifierCode(ev.code)) {
+          sendEvent({ t: "ku", k: ev.code });
+        }
+        return;
+      }
       if (isClipKey(ev)) {
         if (ev.code === "KeyV") {
           // Do not preventDefault: the paste event is the reliable HTTP path.
@@ -455,8 +489,13 @@
   document.addEventListener("cut", () => setTimeout(readAndSendLocal, 0));
   window.addEventListener("focus", readAndSendLocal);
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") readAndSendLocal();
+    if (document.visibilityState === "visible") {
+      readAndSendLocal();
+      return;
+    }
+    releaseModifiers();
   });
+  window.addEventListener("blur", releaseModifiers);
   btnClip.addEventListener("click", applyPendingClip);
 
   if (unlockBar) {

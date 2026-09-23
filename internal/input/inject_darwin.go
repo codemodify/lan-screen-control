@@ -104,19 +104,22 @@ void LSCMove(double x, double y) {
 	}
 }
 
+// button is a CGMouseButton (left 0, right 1, center 2), not a DOM button
+// (left 0, middle 1, right 2). Callers convert with quartzButton first.
+// The button-number field is set explicitly: CGEventCreateMouseEvent ignores
+// its button argument except for "other" mouse events, and an unset number
+// is easy to misread as button 1 (right).
 void LSCButton(double x, double y, int button, int down) {
 	ensureSource();
 	CGPoint p = CGPointMake(x, y);
 	CGEventType type;
-	CGMouseButton btn;
+	CGMouseButton btn = (CGMouseButton)button;
 	switch (button) {
-	case 2:
-		btn = kCGMouseButtonRight;
+	case kCGMouseButtonRight:
 		type = down ? kCGEventRightMouseDown : kCGEventRightMouseUp;
 		rightDown = down;
 		break;
-	case 1:
-		btn = kCGMouseButtonCenter;
+	case kCGMouseButtonCenter:
 		type = down ? kCGEventOtherMouseDown : kCGEventOtherMouseUp;
 		otherDown = down;
 		break;
@@ -129,8 +132,11 @@ void LSCButton(double x, double y, int button, int down) {
 	CGWarpMouseCursorPosition(p);
 	CGEventRef e = CGEventCreateMouseEvent(src, type, p, btn);
 	if (e) {
+		// flags must already match the browser's modifier snapshot.
+		// kCGEventFlagMaskControl on a left click is a macOS context click.
 		CGEventSetFlags(e, flags);
 		CGEventSetIntegerValueField(e, kCGMouseEventClickState, 1);
+		CGEventSetIntegerValueField(e, kCGMouseEventButtonNumber, (int64_t)btn);
 		postEvent(e);
 		CFRelease(e);
 	}
@@ -271,6 +277,13 @@ func (d *darwinInjector) DisplaySize() (int, int) {
 }
 
 func (d *darwinInjector) Apply(ev protocol.Event) {
+	switch ev.Type {
+	case protocol.TypeMouseMove, protocol.TypeMouseDown, protocol.TypeMouseUp, protocol.TypeWheel:
+		// Pointer events carry the keys actually held. A latched Control
+		// from a dropped keyup would make every later left click a context click.
+		d.syncPointerMods(ev.Mods)
+	}
+
 	w, h := d.DisplaySize()
 	x, y := MapPointFromFrame(ev.X, ev.Y, w, h, d.frameW, d.frameH)
 
@@ -278,9 +291,9 @@ func (d *darwinInjector) Apply(ev protocol.Event) {
 	case protocol.TypeMouseMove:
 		C.LSCMove(C.double(x), C.double(y))
 	case protocol.TypeMouseDown:
-		C.LSCButton(C.double(x), C.double(y), C.int(ev.Button), 1)
+		C.LSCButton(C.double(x), C.double(y), C.int(quartzButton(ev.Button)), 1)
 	case protocol.TypeMouseUp:
-		C.LSCButton(C.double(x), C.double(y), C.int(ev.Button), 0)
+		C.LSCButton(C.double(x), C.double(y), C.int(quartzButton(ev.Button)), 0)
 	case protocol.TypeWheel:
 		dx, dy := wheelSteps(ev.DX, ev.DY)
 		C.LSCScroll(C.double(x), C.double(y), C.int32_t(dx), C.int32_t(dy))
@@ -313,6 +326,30 @@ func (d *darwinInjector) Apply(ev protocol.Event) {
 			char = plan.char
 		}
 		d.postKey(plan.code, char, down, plan.allTaps)
+	}
+}
+
+// syncPointerMods makes Shift/Control/Option/Command match the browser
+// snapshot, and posts key-ups for anything that was latched but is no longer
+// held. Intentional holds stay: if the browser still reports Control, the
+// bit remains and a left click is a real Control-click.
+func (d *darwinInjector) syncPointerMods(mods int) {
+	newFlags, releases := reconcilePointerMods(d.flags, mods)
+	if newFlags == d.flags && len(releases) == 0 {
+		return
+	}
+	d.flags = newFlags
+	C.LSCSetFlags(C.uint64_t(d.flags))
+	if len(releases) == 0 {
+		return
+	}
+	locked := C.LSCConsoleLocked() != 0
+	for _, code := range releases {
+		kc, ok := keyCode(code)
+		if !ok {
+			continue
+		}
+		d.postKey(kc, "", false, locked)
 	}
 }
 

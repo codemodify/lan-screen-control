@@ -52,6 +52,34 @@ func TestMouseEventIgnoresMissingData(t *testing.T) {
 	}
 }
 
+func TestMouseButtonAndModsRoundTrip(t *testing.T) {
+	// Left click is button 0. omitempty must not drop a real zero on decode,
+	// and a missing mod snapshot means "no modifiers held".
+	var left Event
+	if err := json.Unmarshal([]byte(`{"t":"md","b":0,"x":0.5,"y":0.5,"m":0}`), &left); err != nil {
+		t.Fatal(err)
+	}
+	if left.Type != TypeMouseDown || left.Button != 0 || left.Mods != 0 {
+		t.Fatalf("left click: %+v", left)
+	}
+
+	var right Event
+	if err := json.Unmarshal([]byte(`{"t":"md","b":2,"x":0.2,"y":0.3,"m":2}`), &right); err != nil {
+		t.Fatal(err)
+	}
+	if right.Button != 2 || right.Mods != ModCtrl {
+		t.Fatalf("right click with control: %+v", right)
+	}
+
+	var middle Event
+	if err := json.Unmarshal([]byte(`{"t":"mu","b":1,"m":1}`), &middle); err != nil {
+		t.Fatal(err)
+	}
+	if middle.Type != TypeMouseUp || middle.Button != 1 || middle.Mods != ModShift {
+		t.Fatalf("middle button up: %+v", middle)
+	}
+}
+
 func TestKeyEventParsesPrintableChar(t *testing.T) {
 	var ev Event
 	if err := json.Unmarshal([]byte(`{"t":"kd","k":"KeyA","c":"a"}`), &ev); err != nil {

@@ -1,6 +1,10 @@
 package input
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/codemodify/lan-screen-control/internal/protocol"
+)
 
 func TestKeyCodeUSANSI(t *testing.T) {
 	cases := map[string]uint16{
@@ -152,6 +156,77 @@ func TestPlanKeyInjectUnlockedKeycode(t *testing.T) {
 func TestModifierFlag(t *testing.T) {
 	if modifierFlag("ShiftLeft") == 0 || modifierFlag("KeyA") != 0 {
 		t.Fatal("modifier flags look wrong")
+	}
+	if modifierFlag("ControlLeft") != flagMaskControl || modifierFlag("ControlRight") != flagMaskControl {
+		t.Fatal("control keys must share the Control flag (macOS control-click)")
+	}
+}
+
+func TestQuartzButtonMapping(t *testing.T) {
+	// DOM PointerEvent.button is not CGMouseButton. Right is DOM 2 but Quartz 1.
+	if quartzButton(0) != quartzButtonLeft {
+		t.Fatalf("left: got %d", quartzButton(0))
+	}
+	if quartzButton(1) != quartzButtonCenter {
+		t.Fatalf("middle: got %d want center %d", quartzButton(1), quartzButtonCenter)
+	}
+	if quartzButton(2) != quartzButtonRight {
+		t.Fatalf("right: got %d want right %d", quartzButton(2), quartzButtonRight)
+	}
+	if quartzButton(-1) != quartzButtonLeft {
+		t.Fatal("unknown button should fall through to left, not right")
+	}
+	if quartzButton(2) == quartzButtonCenter {
+		t.Fatal("DOM right must not be posted as the Quartz center button")
+	}
+}
+
+func TestReconcilePointerModsClearsStuckControl(t *testing.T) {
+	flags, releases := reconcilePointerMods(flagMaskControl|flagMaskAlphaShift, 0)
+	if flags&flagMaskControl != 0 {
+		t.Fatal("stuck Control must be cleared when the browser reports no ctrl")
+	}
+	if flags&flagMaskAlphaShift == 0 {
+		t.Fatal("caps lock latch must survive a pointer snapshot")
+	}
+	want := []string{"ControlLeft", "ControlRight"}
+	if len(releases) != len(want) {
+		t.Fatalf("releases: got %v", releases)
+	}
+	for i := range want {
+		if releases[i] != want[i] {
+			t.Fatalf("releases: got %v", releases)
+		}
+	}
+}
+
+func TestReconcilePointerModsKeepsIntentionalHolds(t *testing.T) {
+	var held uint64 = flagMaskShift | flagMaskControl
+	flags, releases := reconcilePointerMods(held, protocol.ModShift|protocol.ModCtrl)
+	if flags != held {
+		t.Fatalf("intentional shift+control changed: %#x", flags)
+	}
+	if len(releases) != 0 {
+		t.Fatalf("intentional hold must not synthesize keyups: %v", releases)
+	}
+
+	// Control released, shift still held: only Control goes up.
+	flags, releases = reconcilePointerMods(held, protocol.ModShift)
+	if flags&flagMaskControl != 0 || flags&flagMaskShift == 0 {
+		t.Fatalf("flags after partial release: %#x", flags)
+	}
+	if len(releases) != 2 || releases[0] != "ControlLeft" || releases[1] != "ControlRight" {
+		t.Fatalf("partial release: %v", releases)
+	}
+
+	// Browser reports Control that was not latched yet: set the bit, do not
+	// invent a key-down (the real Control keydown still has to land).
+	flags, releases = reconcilePointerMods(0, protocol.ModCtrl)
+	if flags != flagMaskControl {
+		t.Fatalf("snapshot control: %#x", flags)
+	}
+	if len(releases) != 0 {
+		t.Fatalf("adding a modifier must not emit keyups: %v", releases)
 	}
 }
 
